@@ -7,7 +7,7 @@ import { runScheduledJob } from "../jobs/orchestrator";
 
 async function main() {
   try {
-    await runIngestJob();
+    //await runIngestJob();
     // Reset counts
     // const videoRepo = new VideoRepository();
     // const videos = await videoRepo.getAllVideos(10);
@@ -15,7 +15,7 @@ async function main() {
     //   await videoRepo.resetRetryCount(vid.id);
     // }
 
-    //await runScheduledJob(State.MI, 3);
+    await runScheduledJob(State.MI, 7);
     process.exit(0);
   } catch (err) {
     console.error("Ingest job failed:", err);

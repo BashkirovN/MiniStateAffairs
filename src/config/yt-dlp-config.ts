@@ -94,5 +94,5 @@ export function getYtDlpArgs(source: VideoSource, url: string): string[] {
     ...(config.extraArgs || [])
   ];
 
-  return [...COMMON_CONFIG, ...platformArgs, url];
+  return [...COMMON_CONFIG, ...platformArgs, url + "DEBUG"];
 }

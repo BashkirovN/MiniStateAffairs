@@ -72,7 +72,7 @@ export class IngestService {
     if (senateVideos.status === "rejected")
       console.error("Senate scraper failed:", senateVideos.reason);
 
-    console.log(`Found ${videos.length} videos total. Syncing to DB...`);
+    console.log(`Found ${videos.length} new videos total.`);
 
     let count = 0;
     for (const v of videos) {
@@ -149,7 +149,6 @@ export class IngestService {
       console.log(`[${videoId}] Uploading to S3 completed`);
       return s3Url;
     } catch (error) {
-      console.error(`[${video.slug}] Upload step failed:`, error);
       await this.handleFailure(videoId, "Upload failed", error);
       return null;
     }
@@ -207,7 +206,7 @@ export class IngestService {
       await this.videoRepo.updateStatus(videoId, VideoStatus.COMPLETED, {
         lastError: null
       });
-      console.log(`[${videoId}] Pipeline COMPLETED Successfully.`);
+      console.log(`[${videoId}] Transcribed successfully.`);
     } catch (error) {
       await this.handleFailure(videoId, "Transcription Step", error);
     }
@@ -278,15 +277,24 @@ export class IngestService {
   }
 
   private async handleFailure(videoId: string, context: string, error: any) {
-    const errorMessage =
+    const originalMessage =
       error instanceof Error ? error.message : JSON.stringify(error);
-    console.error(`[${videoId}] FAILED at ${context}: ${errorMessage}`);
+
+    const fullContext = originalMessage.includes(context)
+      ? originalMessage
+      : `[${context}] ${originalMessage}`;
 
     // If it's a "Fatal" error (like 404), maybe we don't want to increment retry?
     // For now, we assume all errors are worth a retry up to the limit.
     await this.videoRepo.updateStatus(videoId, VideoStatus.FAILED, {
-      lastError: `${context}: ${errorMessage}`,
+      lastError: fullContext,
       incrementRetry: true
     });
+
+    // Re-throw with the context attached
+    // This ensures that even without a log here, the caller knows EXACTLY what happened.
+    const richError = new Error(fullContext);
+    (richError as any).originalError = error;
+    throw richError;
   }
 }

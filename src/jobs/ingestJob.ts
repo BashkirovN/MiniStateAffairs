@@ -4,11 +4,10 @@ import { shutdownPool } from "../db/client";
 import { TranscriptionService } from "../services/transcriptionService";
 import { TranscriptRepository } from "../db/transcriptRepository";
 import { IngestService } from "../services/ingestService";
-import { MonitoringRepository } from "../db/monitoring";
+import { MonitoringRepository } from "../db/monitoringRepository";
 
 export async function runIngestJob(): Promise<void> {
   const config = loadConfig();
-  console.log("Ingest starting. Bucket:", config.s3Bucket);
 
   const videoRepo = new VideoRepository();
   const transcriptionService = new TranscriptionService();
@@ -109,7 +108,7 @@ export async function runIngestJob(): Promise<void> {
   // }
 
   const monitoringRepository = new MonitoringRepository();
-  await monitoringRepository.getSummary(7);
+  await monitoringRepository.printLastDaysSummary(7);
 
   await shutdownPool();
 }

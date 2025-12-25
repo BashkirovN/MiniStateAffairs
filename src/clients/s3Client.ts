@@ -124,38 +124,6 @@ export async function uploadVideoFromUrl(input: {
     totalBytes += chunk.length;
   });
 
-  // const refererUrl =
-  //   source === VideoSource.SENATE
-  //     ? "https://cloud.castus.tv/"
-  //     : "https://www.house.mi.gov/";
-
-  // const args = [
-  //   "--no-playlist",
-  //   "--output",
-  //   "-",
-  //   "--user-agent",
-  //   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
-  //   "--add-header",
-  //   `Referer:${refererUrl}`,
-  //   "--add-header",
-  //   `Origin:${refererUrl}`,
-  //   "--add-header",
-  //   "DNT:1",
-  //   "--add-header",
-  //   "Sec-Fetch-Mode:cors",
-  //   "--add-header",
-  //   "Sec-Fetch-Site:cross-site",
-  //   "--socket-timeout",
-  //   "30",
-  //   "--fragment-retries",
-  //   "10",
-  //   "--hls-prefer-native",
-  //   "--legacy-server-connect",
-  //   "--no-check-certificate",
-  //   "--retry-sleep 5",
-  //   originalVideoUrl
-  // ];
-
   // yt-dlp arguments
   const args = getYtDlpArgs(source, originalVideoUrl);
 
@@ -185,7 +153,7 @@ export async function uploadVideoFromUrl(input: {
   // Track progress
   upload.on("httpUploadProgress", (p) => {
     const mb = (p.loaded! / 1024 / 1024).toFixed(2);
-    if (Math.floor(Number(mb)) % 50 === 0)
+    if (Number(mb) > 0 && Math.floor(Number(mb)) % 50 === 0)
       console.log(`[${slug}] S3 Uploaded: ${mb} MB`);
   });
 
@@ -212,7 +180,7 @@ export async function uploadVideoFromUrl(input: {
       });
 
       ytDlpProcess.on("error", (err) => {
-        reject(new Error(`Failed to start yt-dlp: ${err.message}`));
+        reject(new Error(`Failed to start yt-dlp`));
       });
     });
 
@@ -229,7 +197,7 @@ export async function uploadVideoFromUrl(input: {
     upload.abort();
     ytDlpProcess.kill("SIGKILL");
 
-    console.error(`[${slug}] Pipeline Failed: ${err.message}`);
+    console.error(`[${slug}] Uploading to S3 Failed`);
 
     // Clean up the S3 object if it was a partial/corrupt upload
     try {
@@ -241,6 +209,11 @@ export async function uploadVideoFromUrl(input: {
       // Ignore if file doesn't exist
     }
 
-    throw err;
+    const errorMessage =
+      err instanceof Error ? err.message : JSON.stringify(err);
+    const fullContext = `[Upload Failed] ${errorMessage}`;
+    const richError = new Error(fullContext);
+    (richError as any).originalError = err;
+    throw richError;
   }
 }

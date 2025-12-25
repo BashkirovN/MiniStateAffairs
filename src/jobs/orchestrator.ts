@@ -31,7 +31,7 @@ export async function runScheduledJob(state: State, daysBack: number = 30) {
     // 2. Discovery: Returns the count of videos found
     await reporter.log("INFO", "Starting Discovery Phase...");
     const countFound = await ingestService.discoverNewVideos(daysBack);
-    reporter.incrementDiscovered(countFound);
+    await reporter.incrementDiscovered(countFound);
     await reporter.log("INFO", `Discovered ${countFound} videos.`);
 
     // 3. Queue Management: Get list of videos needing action
@@ -45,12 +45,12 @@ export async function runScheduledJob(state: State, daysBack: number = 30) {
     for (const video of pendingVideos) {
       try {
         await ingestService.processFullPipeline(video.id);
-        reporter.incrementProcessed();
+        await reporter.incrementProcessed();
       } catch (err: any) {
-        reporter.incrementFailed();
+        await reporter.incrementFailed();
         await reporter.log(
           "ERROR",
-          `Failed processing ${video.id}: ${err.message}`
+          `--- Pipeline Failed ---:\n ${video.id}: ${err.message} `
         );
         // We do NOT throw here; we want to continue processing other videos
       }
