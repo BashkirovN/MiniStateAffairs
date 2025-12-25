@@ -10,6 +10,7 @@ import { Upload } from "@aws-sdk/lib-storage";
 import { PassThrough } from "stream";
 import { State, VideoSource } from "../db/types";
 import { spawn } from "child_process";
+import { getYtDlpArgs } from "../config/yt-dlp-config";
 
 const config = loadConfig();
 
@@ -123,69 +124,40 @@ export async function uploadVideoFromUrl(input: {
     totalBytes += chunk.length;
   });
 
-  // yt-dlp arguments
-  const refererUrl =
-    source === VideoSource.SENATE
-      ? "https://cloud.castus.tv/"
-      : "https://www.house.mi.gov/";
+  // const refererUrl =
+  //   source === VideoSource.SENATE
+  //     ? "https://cloud.castus.tv/"
+  //     : "https://www.house.mi.gov/";
 
   // const args = [
   //   "--no-playlist",
-  //   "-f",
-  //   "b",
-  //   "--merge-output-format",
-  //   "mp4",
   //   "--output",
   //   "-",
   //   "--user-agent",
   //   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
-  //   "--referer",
-  //   refererUrl,
   //   "--add-header",
-  //   "Origin:https://cloud.castus.tv",
+  //   `Referer:${refererUrl}`,
+  //   "--add-header",
+  //   `Origin:${refererUrl}`,
+  //   "--add-header",
+  //   "DNT:1",
   //   "--add-header",
   //   "Sec-Fetch-Mode:cors",
   //   "--add-header",
   //   "Sec-Fetch-Site:cross-site",
-
-  //   // 3. Network & Stability
   //   "--socket-timeout",
   //   "30",
   //   "--fragment-retries",
   //   "10",
   //   "--hls-prefer-native",
-
-  //   // 4. Fragment Passing
   //   "--legacy-server-connect",
-
+  //   "--no-check-certificate",
+  //   "--retry-sleep 5",
   //   originalVideoUrl
   // ];
 
-  const args = [
-    "--no-playlist",
-    "--output",
-    "-",
-    "--user-agent",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
-    "--add-header",
-    `Referer:${refererUrl}`,
-    "--add-header",
-    "Origin:https://cloud.castus.tv",
-    "--add-header",
-    "DNT:1",
-    "--add-header",
-    "Sec-Fetch-Mode:cors",
-    "--add-header",
-    "Sec-Fetch-Site:cross-site",
-    "--socket-timeout",
-    "30",
-    "--fragment-retries",
-    "10",
-    "--hls-prefer-native",
-    "--legacy-server-connect",
-    "--no-check-certificate",
-    originalVideoUrl
-  ];
+  // yt-dlp arguments
+  const args = getYtDlpArgs(source, originalVideoUrl);
 
   const ytDlpProcess = spawn("yt-dlp", args);
   let stderrData = "";

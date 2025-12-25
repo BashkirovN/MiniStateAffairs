@@ -4,6 +4,7 @@ import { shutdownPool } from "../db/client";
 import { TranscriptionService } from "../services/transcriptionService";
 import { TranscriptRepository } from "../db/transcriptRepository";
 import { IngestService } from "../services/ingestService";
+import { MonitoringRepository } from "../db/monitoring";
 
 export async function runIngestJob(): Promise<void> {
   const config = loadConfig();
@@ -68,44 +69,47 @@ export async function runIngestJob(): Promise<void> {
   // Upload video from url to S3
 
   // Reset counts
-  const videos = await videoRepo.getAllVideos(10);
-  for (const vid of videos) {
-    await videoRepo.resetRetryCount(vid.id);
-  }
+  // const videos = await videoRepo.getAllVideos(10);
+  // for (const vid of videos) {
+  //   await videoRepo.resetRetryCount(vid.id);
+  // }
 
   // curl "https://house.mi.gov/VideoArchivePlayer?video=Session-122325.mp4" | grep -i 'src.*mp4\|video\|hls'
-  const processable = await videoRepo.findProcessable(2000);
+  // const processable = await videoRepo.findProcessable(2000);
 
-  console.log("Processable videos in DB:", processable.length);
+  // console.log("Processable videos in DB:", processable.length);
 
-  if (processable.length > 0) {
-    const problematicSenateVideoId = "e85450ef-605a-40d0-8a84-693f9c2653d6";
-    const shortSenateVideoId = "8f35d2bd-b212-4a98-a470-ec8ea2899190";
-    const shortHouseVideoId = "f425f89c-bc74-4f73-9a8a-c06cbc6df9f5";
-    for (const video of processable) {
-      console.log(video.source, video.id, video.external_id);
+  // if (processable.length > 0) {
+  //   const problematicSenateVideoId = "e85450ef-605a-40d0-8a84-693f9c2653d6";
+  //   const shortSenateVideoId = "8f35d2bd-b212-4a98-a470-ec8ea2899190";
+  //   const shortHouseVideoId = "f425f89c-bc74-4f73-9a8a-c06cbc6df9f5";
+  //   for (const video of processable) {
+  //     console.log(video.source, video.id, video.external_id);
 
-      if (video.id === shortHouseVideoId) {
-        console.log("Video: ", video);
+  //     if (video.id === shortHouseVideoId) {
+  //       console.log("Video: ", video);
 
-        const validSenateUrl =
-          "https://cloud.castus.tv/vod/misenate/video/694572f06aeb4fb3964393c4";
+  //       const validSenateUrl =
+  //         "https://cloud.castus.tv/vod/misenate/video/694572f06aeb4fb3964393c4";
 
-        const validDownloadUrl =
-          "https://www.house.mi.gov/ArchiveVideoFiles/Session-122325.mp4";
-        const videoUrl =
-          "https://www.house.mi.gov/ArchiveVideoFiles/HAGRI-111325.mp4";
+  //       const validDownloadUrl =
+  //         "https://www.house.mi.gov/ArchiveVideoFiles/Session-122325.mp4";
+  //       const videoUrl =
+  //         "https://www.house.mi.gov/ArchiveVideoFiles/HAGRI-111325.mp4";
 
-        const s3videoUrl = await ingestService.uploadStep(video.id);
+  //       const s3videoUrl = await ingestService.uploadStep(video.id);
 
-        // Transcribe and save to DB
-        if (s3videoUrl) {
-          console.log(`Video is live at: ${s3videoUrl}`);
-          await ingestService.transcribeStep(video.id);
-        }
-      }
-    }
-  }
+  //       // Transcribe and save to DB
+  //       if (s3videoUrl) {
+  //         console.log(`Video is live at: ${s3videoUrl}`);
+  //         await ingestService.transcribeStep(video.id);
+  //       }
+  //     }
+  //   }
+  // }
+
+  const monitoringRepository = new MonitoringRepository();
+  await monitoringRepository.getSummary(7);
 
   await shutdownPool();
 }

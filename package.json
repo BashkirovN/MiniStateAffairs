@@ -5,8 +5,8 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
-    "dev": "NODE_EXTRA_CA_CERTS=./certs/house-ca.pem ts-node src/bin/ingest.ts",
-    "start": "NODE_EXTRA_CA_CERTS=./certs/house-ca.pem node dist/bin/ingest.js"
+    "dev": "NODE_EXTRA_CA_CERTS=./certs/mi-house-ca.pem ts-node src/bin/ingest.ts",
+    "start": "NODE_EXTRA_CA_CERTS=./certs/mi-house-ca.pem node dist/bin/ingest.js"
   },
   "keywords": [],
   "author": "",

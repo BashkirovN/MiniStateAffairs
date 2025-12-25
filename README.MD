@@ -1,5 +1,13 @@
 # Design decisions and questions
 
+## Decisions
+
+- **AWS S3** and **RDS** + plain **SQL** were picked to get a refresher on the stack used by StateAffairs.
+- **yt-dlp** was picked for its reliable streaming when dealing with brittle connections.
+- Some government websites have issues with certificates. Having a necessary certificate in `certs` solved the problem for Michigan House.
+
+## Questions
+
 - If we only need transcripts, could we use Deepgram to transcribe videos by url instead of downloading them?
 
 Example workflow (step‑by‑step)

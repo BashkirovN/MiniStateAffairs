@@ -7,15 +7,15 @@ import { runScheduledJob } from "../jobs/orchestrator";
 
 async function main() {
   try {
-    //await runIngestJob();
+    await runIngestJob();
     // Reset counts
-    const videoRepo = new VideoRepository();
-    const videos = await videoRepo.getAllVideos(10);
-    for (const vid of videos) {
-      await videoRepo.resetRetryCount(vid.id);
-    }
+    // const videoRepo = new VideoRepository();
+    // const videos = await videoRepo.getAllVideos(10);
+    // for (const vid of videos) {
+    //   await videoRepo.resetRetryCount(vid.id);
+    // }
 
-    await runScheduledJob(State.MI, 2);
+    //await runScheduledJob(State.MI, 3);
     process.exit(0);
   } catch (err) {
     console.error("Ingest job failed:", err);
