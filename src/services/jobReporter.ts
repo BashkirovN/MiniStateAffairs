@@ -1,16 +1,24 @@
 // JobReporter.ts
 import { MonitoringRepository } from "../db/monitoringRepository";
+import { State, VideoSource } from "../db/types";
 
 export class JobReporter {
   private runId: string | null = null;
   private counts = { discovered: 0, processed: 0, failed: 0 };
   private repo = new MonitoringRepository();
 
-  constructor(private state: string) {}
+  constructor(private state: State, private source: VideoSource) {}
 
   async startRun(executorName: string) {
-    this.runId = await this.repo.createJobRun(this.state, executorName);
-    await this.log("INFO", `Job started for state: ${this.state}`);
+    this.runId = await this.repo.createJobRun(
+      this.state,
+      this.source,
+      executorName
+    );
+    await this.log(
+      "INFO",
+      `Job started for state: ${this.state}-${this.source}`
+    );
   }
 
   async log(level: "INFO" | "WARN" | "ERROR", message: string) {
@@ -74,7 +82,7 @@ export class JobReporter {
     const summary = await this.repo.getRunSummary(this.runId);
 
     console.log(`\n${"=".repeat(40)}`);
-    console.log(`JOB FINISHED: ${this.state}`);
+    console.log(`JOB FINISHED: ${this.state}-${this.source}`);
     console.log(`${"=".repeat(40)}`);
 
     // Using a small table for the key metrics

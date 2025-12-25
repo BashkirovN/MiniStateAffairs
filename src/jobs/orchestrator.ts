@@ -3,14 +3,18 @@ import { JobReporter } from "../services/jobReporter";
 import { VideoRepository } from "../db/videoRepository";
 import { TranscriptRepository } from "../db/transcriptRepository";
 import { TranscriptionService } from "../services/transcriptionService";
-import { State } from "../db/types";
+import { State, VideoSource } from "../db/types";
 
 /**
  * THE CRON FUNCTION
- * Usage: await runScheduledJob('MI');
+ * Usage: await runScheduledJob('MI', 'senate');
  */
-export async function runScheduledJob(state: State, daysBack: number = 30) {
-  const reporter = new JobReporter(state);
+export async function runScheduledJob(
+  state: State,
+  source: VideoSource,
+  daysBack: number = 30
+) {
+  const reporter = new JobReporter(state, source);
 
   // 1. Dependency Injection (Manual or via container)
   const videoRepo = new VideoRepository();
@@ -26,16 +30,23 @@ export async function runScheduledJob(state: State, daysBack: number = 30) {
     await reporter.startRun(`worker-${process.pid}`);
 
     // 1. Maintenance: Reset "Zombie" processing jobs
-    await ingestService.recoverStuckJobs(10);
+    await ingestService.recoverStuckJobs(state, source, 10);
 
     // 2. Discovery: Returns the count of videos found
     await reporter.log("INFO", "Starting Discovery Phase...");
-    const countFound = await ingestService.discoverNewVideos(daysBack);
+    const countFound = await ingestService.discoverNewVideos(
+      state,
+      source,
+      daysBack
+    );
     await reporter.incrementDiscovered(countFound);
     await reporter.log("INFO", `Discovered ${countFound} videos.`);
 
     // 3. Queue Management: Get list of videos needing action
-    const pendingVideos = await videoRepo.findUnfinishedWorkByState(state);
+    const pendingVideos = await videoRepo.findUnfinishedWorkByStateAndSource(
+      state,
+      source
+    );
     await reporter.log(
       "INFO",
       `Found ${pendingVideos.length} videos requiring processing.`

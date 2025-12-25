@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { State } from "../db/types";
+import { State, VideoSource } from "../db/types";
 import { VideoRepository } from "../db/videoRepository";
 import { runIngestJob } from "../jobs/ingestJob";
 import { runScheduledJob } from "../jobs/orchestrator";
@@ -15,7 +15,7 @@ async function main() {
     //   await videoRepo.resetRetryCount(vid.id);
     // }
 
-    await runScheduledJob(State.MI, 7);
+    await runScheduledJob(State.MI, VideoSource.SENATE, 7);
     process.exit(0);
   } catch (err) {
     console.error("Ingest job failed:", err);

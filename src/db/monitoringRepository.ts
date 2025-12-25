@@ -4,10 +4,15 @@ export class MonitoringRepository {
   /**
    * Creates the initial record for a job run
    */
-  async createJobRun(state: string, executor: string): Promise<string> {
+  async createJobRun(
+    state: string,
+    source: string,
+    executor: string
+  ): Promise<string> {
     const res = await query<{ id: string }>(
-      `INSERT INTO job_runs (state, executor, status) VALUES ($1, $2, 'running') RETURNING id`,
-      [state, executor]
+      `INSERT INTO job_runs (state, source, executor, status) 
+       VALUES ($1, $2, $3, 'running') RETURNING id`,
+      [state, source, executor]
     );
     return res.rows[0].id;
   }
@@ -81,6 +86,7 @@ export class MonitoringRepository {
     const res = await query(
       `SELECT 
         state, 
+        source,
         status, 
         items_discovered as found, 
         items_processed as ok, 
@@ -101,6 +107,7 @@ export class MonitoringRepository {
       `
       SELECT 
         state,
+        source,
         DATE(start_time) as run_date,
         COUNT(id) as runs_count,
         SUM(items_discovered) as total_found,
@@ -109,8 +116,8 @@ export class MonitoringRepository {
         ROUND(SUM(items_processed)::numeric / NULLIF(SUM(items_processed + items_failed), 0) * 100, 1) as success_rate_pct
       FROM job_runs
       WHERE start_time > NOW() - ($1 * INTERVAL '1 day')
-      GROUP BY state, run_date
-      ORDER BY run_date DESC, state;
+      GROUP BY state, source, run_date
+      ORDER BY run_date DESC, state, source;
       `,
       [days]
     );
@@ -129,10 +136,8 @@ export class MonitoringRepository {
       return;
     }
 
-    // Map the data to a "View Model" for a cleaner table display
     const reportData = rows.map((row: any) => {
       const rate = parseFloat(row.success_rate_pct || 0);
-
       let statusIcon = "🟢";
       if (rate < 95) statusIcon = "🟡";
       if (rate < 80) statusIcon = "🔴";
@@ -140,7 +145,8 @@ export class MonitoringRepository {
       return {
         Stat: statusIcon,
         State: row.state,
-        Date: new Date(row.run_date).toISOString().split("T")[0], // YYYY-MM-DD
+        Source: row.source || "N/A",
+        Date: new Date(row.run_date).toISOString().split("T")[0],
         Runs: parseInt(row.runs_count),
         Found: parseInt(row.total_found),
         OK: parseInt(row.total_success),

@@ -2,8 +2,6 @@ import { VideoRepository } from "../db/videoRepository";
 import { TranscriptRepository } from "../db/transcriptRepository";
 import { State, VideoRow, VideoSource, VideoStatus } from "../db/types";
 import { TranscriptionService, TransProvider } from "./transcriptionService";
-import { fetchHouseRecent } from "../scrapers/MI/house";
-import { fetchSenateRecent } from "../scrapers/MI/senate";
 import { uploadVideoFromUrl } from "../clients/s3Client";
 
 export enum ValidationReason {
@@ -53,46 +51,50 @@ export class IngestService {
    * Fetches metadata from external sources.
    * Designed to be idempotent (safe to run multiple times).
    */
+  async discoverNewVideos(
+    state: State,
+    source: VideoSource,
+    daysBack: number = 30
+  ): Promise<number> {
+    try {
+      // Note: scraper functions must consistently be named fetchRecent()
+      const module = await import(`../scrapers/${state}/${source}`);
+      const videos = await module.fetchRecent({ daysBack });
 
-  // TODO: Make it work for other states
-  async discoverNewVideos(daysBack: number = 30): Promise<number> {
-    console.log("Starting discovery...");
-    const [houseVideos, senateVideos] = await Promise.allSettled([
-      fetchHouseRecent({ daysBack }),
-      fetchSenateRecent({ daysBack })
-    ]);
+      if (!videos || videos.length === 0) {
+        console.log(`[Discovery] No new videos found for ${state} ${source}.`);
+        return 0;
+      }
 
-    const videos = [
-      ...(houseVideos.status === "fulfilled" ? houseVideos.value : []),
-      ...(senateVideos.status === "fulfilled" ? senateVideos.value : [])
-    ];
+      // 3. Sync to DB
+      let count = 0;
+      for (const v of videos) {
+        const cleanDate =
+          v.hearingDate instanceof Date
+            ? v.hearingDate
+            : new Date(v.hearingDate);
 
-    if (houseVideos.status === "rejected")
-      console.error("House scraper failed:", houseVideos.reason);
-    if (senateVideos.status === "rejected")
-      console.error("Senate scraper failed:", senateVideos.reason);
+        await this.videoRepo.upsertDiscoveredVideo({
+          state: v.state,
+          source: v.source,
+          externalId: v.externalId,
+          slug: v.slug,
+          title: v.title,
+          hearingDate: cleanDate,
+          videoPageUrl: v.videoPageUrl,
+          originalVideoUrl: v.originalVideoUrl
+        });
+        count++;
+      }
 
-    console.log(`Found ${videos.length} new videos total.`);
-
-    let count = 0;
-    for (const v of videos) {
-      // Ensure hearingDate is a Date object before passing to DB
-      const cleanDate =
-        v.hearingDate instanceof Date ? v.hearingDate : new Date(v.hearingDate);
-
-      await this.videoRepo.upsertDiscoveredVideo({
-        state: v.state,
-        source: v.source,
-        externalId: v.externalId,
-        slug: v.slug,
-        title: v.title,
-        hearingDate: cleanDate,
-        videoPageUrl: v.videoPageUrl,
-        originalVideoUrl: v.originalVideoUrl
-      });
-      count++;
+      return count;
+    } catch (error: any) {
+      console.error(
+        `[Discovery] Failed for ${state} ${source}:`,
+        error.message
+      );
+      throw error; // Re-throw so the worker reports the discovery failure
     }
-    return count;
   }
 
   /**
@@ -217,9 +219,17 @@ export class IngestService {
    * Resets videos that have been "stuck" in a processing state for too long.
    * Could be run once at the start of the job.
    */
-  async recoverStuckJobs(hoursThreshold: number = 6) {
+  async recoverStuckJobs(
+    state: State,
+    source: VideoSource,
+    hoursThreshold: number = 6
+  ) {
     console.log("Running maintenance check for stuck jobs...");
-    const count = await this.videoRepo.resetStuckVideos(hoursThreshold);
+    const count = await this.videoRepo.resetStuckVideos(
+      state,
+      source,
+      hoursThreshold
+    );
     if (count > 0) {
       console.warn(
         `[Maintenance] Reset ${count} stuck videos to FAILED state.`

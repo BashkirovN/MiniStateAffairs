@@ -101,20 +101,21 @@ export class VideoRepository {
     return result.rows;
   }
 
-  async findUnfinishedWorkByState(
-    state: string,
+  async findUnfinishedWorkByStateAndSource(
+    state: State,
+    source: VideoSource,
     limit: number = 1000
   ): Promise<VideoRow[]> {
     const { rows } = await query<VideoRow>(
       `
     SELECT * FROM videos 
-    WHERE state = $1 
-    AND status IN ('pending', 'failed', 'downloaded') 
+    WHERE state = $1 AND source = $2
+    AND status != 'completed'
     AND (retry_count < 5)
     ORDER BY hearing_date ASC
-    LIMIT $2
+    LIMIT $3
     `,
-      [state, limit]
+      [state, source, limit]
     );
     return rows;
   }
@@ -169,7 +170,11 @@ export class VideoRepository {
    * * @param hoursThreshold Number of hours before a job is considered "stuck"
    * @returns The number of videos reset
    */
-  async resetStuckVideos(hoursThreshold: number): Promise<number> {
+  async resetStuckVideos(
+    state: State,
+    source: VideoSource,
+    hoursThreshold: number
+  ): Promise<number> {
     const result = await query(
       `
       UPDATE videos
@@ -178,11 +183,13 @@ export class VideoRepository {
         last_error = 'Auto-Reset: Job stuck in processing state for too long',
         updated_at = NOW()
       WHERE
-        status IN ('downloading', 'transcribing')
-        AND updated_at < NOW() - ($1 * INTERVAL '1 hour')
+        state = $1
+        AND source = $2
+        AND status IN ('downloading', 'transcribing')
+        AND updated_at < NOW() - ($3 * INTERVAL '1 hour')
       RETURNING id
       `,
-      [hoursThreshold]
+      [state, source, hoursThreshold]
     );
 
     return result.rows.length;

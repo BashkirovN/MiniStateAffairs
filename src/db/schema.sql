@@ -52,6 +52,7 @@ CREATE TYPE job_status AS ENUM ('running', 'completed', 'failed', 'completed_wit
 CREATE TABLE job_runs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   state VARCHAR(15) NOT NULL,            -- e.g., 'MI'
+  source VARCHAR(15) NOT NULL;                    -- e.g., 'house'
   executor VARCHAR(100) NOT NULL,        -- e.g., 'cron-worker-1'
   start_time TIMESTAMP NOT NULL DEFAULT NOW(),
   end_time TIMESTAMP,

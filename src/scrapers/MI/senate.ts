@@ -24,7 +24,7 @@ const MI_SENATE_CDN_ID = "dlttx48mxf9m3";
 const MI_SENATE_API_URL =
   "https://tf4pr3wftk.execute-api.us-west-2.amazonaws.com/default/api/all";
 
-export async function fetchSenateRecent(
+export async function fetchRecent(
   options: { daysBack?: number } = {}
 ): Promise<DiscoveredVideo[]> {
   const { daysBack = 30 } = options;
@@ -105,6 +105,5 @@ export async function fetchSenateRecent(
     page++;
   }
 
-  console.log(`Found ${results.length} recent Senate videos`);
   return results;
 }

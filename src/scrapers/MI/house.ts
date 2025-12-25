@@ -30,7 +30,7 @@ function parseHouseDate(dateText: string): Date | null {
   return new Date(parseInt(year), month, parseInt(day));
 }
 
-export async function fetchHouseRecent(
+export async function fetchRecent(
   options: { daysBack?: number } = {}
 ): Promise<DiscoveredVideo[]> {
   const { daysBack = 30 } = options;
@@ -83,7 +83,5 @@ export async function fetchHouseRecent(
       originalVideoUrl: `https://www.house.mi.gov/ArchiveVideoFiles/${rawVideoId}` // The actual MP4 link
     });
   });
-
-  console.log(`Found ${results.length} recent House videos`);
   return results;
 }
