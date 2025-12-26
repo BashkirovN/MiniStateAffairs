@@ -5,7 +5,15 @@ export interface FetchWithRetryOptions extends RetryOptions {
 }
 
 /**
- * Fetch with retries on network errors and 5xx responses.
+ * Wraps the native fetch API with automated retry logic for transient failures.
+ * Specifically targets 5xx server errors and network-level exceptions for retries,
+ * while allowing for custom success-condition overrides via acceptableStatus.
+ * * @param url - The destination endpoint
+ * @param init - Standard RequestInit options (headers, method, body, etc.)
+ * @param options - Configuration for retry behavior including acceptable status codes
+ * @returns A promise resolving to the successful Response object
+ * * @example
+ * await fetchWithRetry('https://api.gov/data', { method: 'GET' }, { maxAttempts: 3 })
  */
 export async function fetchWithRetry(
   url: string,

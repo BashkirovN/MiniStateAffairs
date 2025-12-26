@@ -4,6 +4,16 @@ export interface RetryOptions {
   maxDelayMs?: number; // upper bound on delay
 }
 
+/**
+ * Executes an asynchronous function with an exponential backoff strategy and randomized jitter.
+ * Designed to mitigate "thundering herd" issues by increasing the delay between
+ * successive attempts up to a specified maximum.
+ * *
+ * * @param fn - The asynchronous function or API call to execute
+ * @param options - Configuration for max attempts and delay timing (base and cap)
+ * @returns The resolved value of the provided function `fn`
+ * @throws The final error encountered if the maximum number of attempts is exhausted
+ */
 export async function retryWithBackoff<T>(
   fn: () => Promise<T>,
   options: RetryOptions = {}

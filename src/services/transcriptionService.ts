@@ -17,8 +17,14 @@ export class TranscriptionService {
   ) {}
 
   /**
-   * Transcribes a video from an accessible URL (e.g., S3 public or presigned URL),
-   * stores the transcript, and updates video status.
+   * Orchestrates the transcription process for a specific video using a remote URL.
+   * * This method interfaces with the transcription provider, persists the resulting
+   * text and raw metadata to the database, and transitions the video status
+   * from 'transcribing' to either 'completed' or 'failed'.
+   * * @param videoId The UUID of the video to be transcribed
+   * @param url A publicly accessible or presigned S3 URL of the source media file
+   * @returns A promise resolving to the structured transcription result, including text and provider metadata
+   * @throws TranscriptionError if the provider fails to process the media
    */
   async transcribeVideoFromUrl(
     videoId: string,

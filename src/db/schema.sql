@@ -30,6 +30,10 @@ CREATE TABLE videos (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 
+    CONSTRAINT valid_video_status CHECK (status IN (
+            'queued', 'pending', 'downloading', 'downloaded', 
+            'transcribing', 'completed', 'failed', 'permanent_failure'
+          )),
     CONSTRAINT unique_video_source UNIQUE (state, source, external_id),
     CONSTRAINT unique_video_slug UNIQUE (slug)
 );

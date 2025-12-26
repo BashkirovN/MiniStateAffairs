@@ -18,7 +18,7 @@ async function main() {
     await runScheduledJob(State.MI, VideoSource.SENATE, 7);
     process.exit(0);
   } catch (err) {
-    console.error("Ingest job failed:", err);
+    console.error("Job failed:", err);
     process.exit(1);
   }
 }

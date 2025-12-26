@@ -24,6 +24,14 @@ const MI_SENATE_CDN_ID = "dlttx48mxf9m3";
 const MI_SENATE_API_URL =
   "https://tf4pr3wftk.execute-api.us-west-2.amazonaws.com/default/api/all";
 
+/**
+ * Scrapes the Michigan Senate API to discover recent video records.
+ * Iterates through paginated results from the Castus Cloud API, normalizing metadata
+ * and constructing CDN URLs for HLS streams until the specified date cutoff is reached.
+ * @param options - Configuration for the lookback window
+ * @param options.daysBack - Number of days in the past to search for videos (defaults to 30)
+ * @returns A promise resolving to an array of discovered video objects ready for ingestion
+ */
 export async function fetchRecent(
   options: { daysBack?: number } = {}
 ): Promise<DiscoveredVideo[]> {

@@ -1,6 +1,12 @@
-// JobReporter.ts
 import { MonitoringRepository } from "../db/monitoringRepository";
 import { State, VideoSource } from "../db/types";
+
+// TODO: Move this to a shared library
+export enum LogLevel {
+  INFO = "INFO",
+  WARN = "WARN",
+  ERROR = "ERROR"
+}
 
 export class JobReporter {
   private runId: string | null = null;
@@ -9,49 +15,85 @@ export class JobReporter {
 
   constructor(private state: State, private source: VideoSource) {}
 
-  async startRun(executorName: string) {
+  /**
+   * Initializes a new job run record and establishes the tracking context.
+   * This must be called before any logging or metric increments to ensure
+   * data is correctly linked to a unique execution UUID.
+   * @param executorName The identifier of the environment or service running the task
+   */
+  async startRun(executorName: string): Promise<void> {
     this.runId = await this.repo.createJobRun(
       this.state,
       this.source,
       executorName
     );
     await this.log(
-      "INFO",
-      `Job started for state: ${this.state}-${this.source}`
+      LogLevel.INFO,
+      `Job started for: ${this.state}-${this.source}`
     );
   }
 
-  async log(level: "INFO" | "WARN" | "ERROR", message: string) {
+  /**
+   * Records a timestamped log message to both the local console and the database.
+   * @param level The severity level using the LogLevel enum (INFO, WARN, ERROR)
+   * @param message The descriptive text to be recorded
+   */
+  async log(level: LogLevel, message: string): Promise<void> {
     if (!this.runId) return;
 
     const timestamp = new Date().toLocaleTimeString();
-    const icon = level === "ERROR" ? "❌" : level === "WARN" ? "⚠️" : "ℹ️";
-    console.log(`[${timestamp}] ${icon} ${message}`);
 
-    await this.repo.insertLog(this.runId, level, message);
+    const icons = {
+      [LogLevel.INFO]: "ℹ️",
+      [LogLevel.WARN]: "⚠️",
+      [LogLevel.ERROR]: "❌"
+    };
+    console.log(`[${timestamp}] ${icons[level]} ${message}`);
+
+    await this.repo.insertJobLog(this.runId, level, message);
   }
 
-  async incrementDiscovered(count: number = 1) {
+  /**
+   * Increments the tally of items discovered during the initial scraping phase.
+   * Automatically synchronizes the new count to the database metrics.
+   * @param count The number of new items found (defaults to 1)
+   */
+  async incrementDiscovered(count: number = 1): Promise<void> {
     this.counts.discovered += count;
-    await this.sync();
+    await this.syncJobMetrics();
   }
 
-  async incrementProcessed() {
+  /**
+   * Tracks a successfully processed video and triggers a database sync.
+   */
+  async incrementProcessed(): Promise<void> {
     this.counts.processed++;
-    await this.sync();
+    await this.syncJobMetrics();
   }
 
-  async incrementFailed() {
+  /**
+   * Tracks an item that failed to process and triggers a database sync.
+   */
+  async incrementFailed(): Promise<void> {
     this.counts.failed++;
-    await this.sync();
+    await this.syncJobMetrics();
   }
 
-  private async sync() {
+  /**
+   * Internal helper to persist current in-memory counters to the database.
+   * Ensures that the monitoring dashboard stays updated even if a job is long-running.
+   */
+  private async syncJobMetrics(): Promise<void> {
     if (!this.runId) return;
-    await this.repo.updateMetrics(this.runId, this.counts);
+    await this.repo.updateJobMetrics(this.runId, this.counts);
   }
 
-  async finishRun(error?: Error) {
+  /**
+   * Concludes the job run, calculates final status, and captures terminal errors.
+   * Triggers the final report generation to the console upon completion.
+   * @param error Optional Error object if the job terminated due to an exception
+   */
+  async finishRun(error?: Error): Promise<void> {
     if (!this.runId) return;
 
     let status = "completed";
@@ -60,32 +102,35 @@ export class JobReporter {
     if (error) {
       status = "failed";
       errorSummary = error.message;
-      await this.log("ERROR", `Fatal crash: ${error.message}`);
+      await this.log(LogLevel.ERROR, `Fatal crash: ${error.message}`);
     } else if (this.counts.failed > 0) {
       status = "completed_with_errors";
     }
 
-    // 1. Save final state
+    // Save final state
     await this.repo.finalizeJobRun(this.runId, {
       status,
       counts: this.counts,
       errorSummary
     });
 
-    // 2. Output final results to console
+    // Output final results to console
     await this.printFinalSummary();
   }
 
-  private async printFinalSummary() {
+  /**
+   * Fetches the finalized run data and outputs a formatted summary table.
+   * Provides immediate feedback on job performance, duration, and error details.
+   */
+  private async printFinalSummary(): Promise<void> {
     if (!this.runId) return;
 
-    const summary = await this.repo.getRunSummary(this.runId);
+    const summary = await this.repo.getJobRunSummary(this.runId);
 
     console.log(`\n${"=".repeat(40)}`);
     console.log(`JOB FINISHED: ${this.state}-${this.source}`);
     console.log(`${"=".repeat(40)}`);
 
-    // Using a small table for the key metrics
     console.table([
       {
         Status: summary.status,
@@ -104,7 +149,9 @@ export class JobReporter {
   }
 
   /**
-   * Helper to make Postgres duration (e.g. {seconds: 12, milliseconds: 500}) readable
+   * Converts a Postgres Interval object into a human-readable string.
+   * Handles edge cases for short-running jobs that finish in seconds.
+   * @param duration The interval object from the database query
    */
   private formatPostgresInterval(duration: any): string {
     if (!duration) return "0s";

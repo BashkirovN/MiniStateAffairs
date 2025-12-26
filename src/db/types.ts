@@ -14,7 +14,8 @@ export enum VideoStatus {
   DOWNLOADED = "downloaded", // Video file is safe in S3
   TRANSCRIBING = "transcribing", // Transcription in progress
   COMPLETED = "completed", // Video uploaded AND transcribed
-  FAILED = "failed" // Generic failure
+  FAILED = "failed", // Failed and scheduled for a retry
+  PERMANENT_FAILURE = "permanent_failure" // Won't be picked up again
 }
 
 export interface VideoRow {

@@ -108,7 +108,7 @@ export async function runIngestJob(): Promise<void> {
   // }
 
   const monitoringRepository = new MonitoringRepository();
-  await monitoringRepository.printLastDaysSummary(7);
+  await monitoringRepository.printLastDaysJobSummary(7);
 
   await shutdownPool();
 }

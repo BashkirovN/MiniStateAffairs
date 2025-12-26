@@ -10,7 +10,7 @@ import { Upload } from "@aws-sdk/lib-storage";
 import { PassThrough } from "stream";
 import { State, VideoSource } from "../db/types";
 import { spawn } from "child_process";
-import { getYtDlpArgs } from "../config/yt-dlp-config";
+import { getYtDlpArgs } from "../config/yt-dlp";
 
 const config = loadConfig();
 
@@ -31,7 +31,14 @@ export interface UploadParams {
 }
 
 /**
- * Uploads an object to S3. Idempotent if you always use the same key.
+ * Uploads an arbitrary data object to an S3 bucket.
+ * This operation is idempotent; providing an existing key will overwrite the current content.
+ * @param params - The payload and destination metadata
+ * @param params.bucket - Optional override for the target S3 bucket
+ * @param params.key - The unique path identifier within the bucket
+ * @param params.body - The data to store (Buffer, Stream, or String)
+ * @param params.contentType - The MIME type of the file (e.g., 'application/pdf')
+ * @returns A promise that resolves when the upload is successfully acknowledged
  */
 export async function uploadObject({
   bucket,
@@ -50,7 +57,12 @@ export async function uploadObject({
 }
 
 /**
- * Checks if an object exists in S3.
+ * Checks for the existence of an object in S3 using a metadata-only request.
+ * Determines if a file is present without downloading the content.
+ * @param key - The unique path identifier to check
+ * @param bucket - Optional override for the target S3 bucket
+ * @returns A promise resolving to true if the object exists, false if it is missing (404)
+ * @throws Error if a non-404 network or permission error occurs
  */
 export async function objectExists(
   key: string,
@@ -71,6 +83,14 @@ export async function objectExists(
   }
 }
 
+/**
+ * Generates a publicly accessible HTTPS URL for an S3 object.
+ * Note: This assumes the bucket/object permissions are set to public-read.
+ * @param key - The S3 object key
+ * @param bucket - The name of the S3 bucket
+ * @param region - The AWS region where the bucket resides
+ * @returns A formatted string URL for direct media access
+ */
 export function buildPublicS3Url(
   key: string,
   bucket: string,
@@ -82,8 +102,17 @@ export function buildPublicS3Url(
 }
 
 /**
- * Builds a structured S3 key for video storage.
- * Example: videos/MI/house/2025/12/mi-house-agri-111325-2025-12-23.mp4
+ * Builds a structured, hierarchical S3 key for organized video storage.
+ * Paths are grouped by state, source, and hearing date to allow for easier
+ * lifecycle management and manual browsing.
+ * @param state - The geographic state (e.g., 'MI')
+ * @param source - The branch of government (e.g., 'house')
+ * @param slug - The URL-friendly video identifier
+ * @param hearingDate - The date of the hearing used for directory partitioning
+ * @returns A string path in the format: videos/{state}/{source}/{year}/{month}/{slug}.mp4
+ * @example
+ * buildVideoObjectKey('MI', 'house', 'mi-house-agri-111325-2025-12-23', new Date('2025-12-23'))
+ * // returns "videos/MI/house/2025/12/mi-house-agri-111325-2025-12-23.mp4"
  */
 export function buildVideoObjectKey(
   state: State,
@@ -97,6 +126,14 @@ export function buildVideoObjectKey(
   return `videos/${state}/${source}/${year}/${month}/${slug}.mp4`;
 }
 
+/**
+ * Pipes a live video stream from an external URL directly into an S3 object.
+ * Uses a PassThrough stream to bridge a yt-dlp child process with the S3 multipart
+ * uploader, ensuring the system can handle large files without high memory overhead.
+ * @param input - The video source metadata and destination identifiers
+ * @returns A promise resolving to the public URL of the finalized S3 object
+ * @throws Error if the download process fails or if the resulting file size is below the 5MB safety threshold
+ */
 export async function uploadVideoFromUrl(input: {
   state: State;
   source: VideoSource;

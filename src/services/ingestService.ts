@@ -29,17 +29,16 @@ export class IngestService {
   ) {}
 
   /**
-   * MAIN ENTRY POINT
-   * Orchestrates the entire lifecycle for a single video.
-   * Can be called individually or via a loop/queue.
+   * Orchestrates the end-to-end processing lifecycle for a single video.
+   * Coordinates the transition from raw external URL to S3 storage,
+   * followed by automated transcription and database finalization.
+   * @param videoId The UUID of the video to process through the pipeline
    */
-  async processFullPipeline(videoId: string) {
+  async processFullPipeline(videoId: string): Promise<void> {
     console.log(`\n--- Processing Pipeline for video_id: ${videoId} ---`);
 
-    // Step 1: Upload (or check if already uploaded)
     const s3Url = await this.uploadStep(videoId);
 
-    // Step 2: Transcribe (only if step 1 succeeded or was already done)
     if (s3Url) {
       await this.transcribeStep(videoId);
     }
@@ -47,9 +46,15 @@ export class IngestService {
   }
 
   /**
-   * DISCOVERY PHASE
-   * Fetches metadata from external sources.
-   * Designed to be idempotent (safe to run multiple times).
+   * Executes the discovery phase by dynamically loading a state-and-source-specific scraper.
+   * Fetches recent video metadata, cleans hearing dates, and performs an idempotent
+   * upsert into the video repository.
+   * New videos will have status PENDING.
+   * @param state The geographic state to scrape (e.g., 'MI')
+   * @param source The branch or source (e.g., 'house')
+   * @param daysBack How many days into the past to look for "new" videos
+   * @returns The total number of video records synchronized to the database
+   * @throws Error if the scraper module or 'fetchRecent' function is missing
    */
   async discoverNewVideos(
     state: State,
@@ -57,7 +62,6 @@ export class IngestService {
     daysBack: number = 30
   ): Promise<number> {
     try {
-      // Note: scraper functions must consistently be named fetchRecent()
       const module = await import(`../scrapers/${state}/${source}`);
       const videos = await module.fetchRecent({ daysBack });
 
@@ -66,7 +70,6 @@ export class IngestService {
         return 0;
       }
 
-      // 3. Sync to DB
       let count = 0;
       for (const v of videos) {
         const cleanDate =
@@ -89,6 +92,14 @@ export class IngestService {
 
       return count;
     } catch (error: any) {
+      if (
+        error instanceof TypeError &&
+        error.message.includes("fetchRecent is not a function")
+      ) {
+        throw new Error(
+          `Scraper functions must consistently be named fetchRecent(). Please verify the scraper implementation.`
+        );
+      }
       console.error(
         `[Discovery] Failed for ${state} ${source}:`,
         error.message
@@ -98,22 +109,36 @@ export class IngestService {
   }
 
   /**
-   * STEP 1: DOWNLOAD & UPLOAD
-   * Moves video from external Gov site -> AWS S3
+   * Retrieves the current list of prioritized work for a specific state and source.
+   * Identifies videos that are either brand new or have previously failed and need retrying.
+   * @param state The geographic state
+   * @param source The branch of government
+   */
+  async getQueue(state: State, source: VideoSource): Promise<VideoRow[]> {
+    return await this.videoRepo.findUnfinishedWorkByStateAndSource(
+      state,
+      source
+    );
+  }
+
+  /**
+   * Manages the stream upload of media from government servers to AWS S3.
+   * Validates video status before execution and handles "fast-tracking" if the file
+   * is already present in S3 storage.
    * Transitions: PENDING/FAILED -> DOWNLOADING -> DOWNLOADED
+   * @param videoId The UUID of the video to upload
+   * @returns The S3 key/URL upon success, or null if skipped/failed
    */
   async uploadStep(videoId: string): Promise<string | null> {
-    // 1. Validate
     const result = await this.validateStep(videoId, [
       VideoStatus.PENDING,
       VideoStatus.FAILED
     ]);
 
-    // 1b. Fast-track if already done
     if (!result.success) {
       if (result.reason === ValidationReason.WRONG_STATUS) {
         // Check if it's already past this step
-        const v = (result as any).video; // Hacky cast, but we know it exists if reason is WRONG_STATUS
+        const v = (result as any).video;
         if (
           v &&
           (v.status === VideoStatus.DOWNLOADED ||
@@ -133,7 +158,7 @@ export class IngestService {
     const { video } = result;
 
     try {
-      //Move to DOWNLOADING to prevent other workers from picking it up
+      //  Lock status
       await this.videoRepo.updateStatus(videoId, VideoStatus.DOWNLOADING);
 
       console.log(`Uploading to S3...`);
@@ -157,9 +182,10 @@ export class IngestService {
   }
 
   /**
-   * STEP 2: TRANSCRIBE
-   * Sends S3 file -> Transcription Provider (Deepgram/Whisper)
+   * Coordinates the transcription of a video file stored in S3.
+   * Interfaces with external providers, saves transcript text to the database.
    * Transitions: DOWNLOADED -> TRANSCRIBING -> COMPLETED
+   * @param videoId The UUID of the video to transcribe
    */
   async transcribeStep(videoId: string): Promise<void> {
     const result = await this.validateStep(videoId, [VideoStatus.DOWNLOADED]);
@@ -173,7 +199,6 @@ export class IngestService {
 
     const { video } = result;
 
-    // Safety Check: We cannot transcribe without a file
     if (!video.s3_key) {
       await this.handleFailure(
         videoId,
@@ -184,18 +209,18 @@ export class IngestService {
     }
 
     try {
-      // 1. Lock status
+      //  Lock status
       await this.videoRepo.updateStatus(videoId, VideoStatus.TRANSCRIBING);
       console.log(`[${videoId}] Sending to Transcription Service...`);
 
-      // 2. Transcribe
+      //  Transcribe
       const transcriptResult =
         await this.transcriptionService.transcribeVideoFromUrl(
           videoId,
           video.s3_key
         );
 
-      // 3. Save Transcript
+      //  Save Transcript
       await this.transcriptRepo.createTranscript({
         videoId,
         provider: TransProvider.DEEPGRAM,
@@ -204,7 +229,7 @@ export class IngestService {
         rawJson: transcriptResult.raw
       });
 
-      // 4. Complete
+      //  Complete
       await this.videoRepo.updateStatus(videoId, VideoStatus.COMPLETED, {
         lastError: null
       });
@@ -215,30 +240,33 @@ export class IngestService {
   }
 
   /**
-   * RECOVERY: Maintenance Mode
-   * Resets videos that have been "stuck" in a processing state for too long.
-   * Could be run once at the start of the job.
+   * Maintenance method to reset videos that have timed out during processing.
+   * Moves 'stuck' jobs back to the FAILED state so they can be picked up by the next worker.
+   * @param state The geographic state
+   * @param source The branch of government
+   * @param hoursThreshold The duration after which a job is considered abandoned
    */
   async recoverStuckJobs(
     state: State,
     source: VideoSource,
     hoursThreshold: number = 6
-  ) {
-    console.log("Running maintenance check for stuck jobs...");
+  ): Promise<number> {
     const count = await this.videoRepo.resetStuckVideos(
       state,
       source,
       hoursThreshold
     );
-    if (count > 0) {
-      console.warn(
-        `[Maintenance] Reset ${count} stuck videos to FAILED state.`
-      );
-    }
+    return count;
   }
 
   // --- HELPERS ---
 
+  /**
+   * Internal helper to verify if a video is eligible for a specific processing step.
+   * Checks for existence, previous completion, max retry limits, and status alignment.
+   * @param videoId The UUID of the video
+   * @param allowedStatuses An array of statuses valid for the requested action
+   */
   private async validateStep(
     videoId: string,
     allowedStatuses: VideoStatus[]
@@ -286,6 +314,13 @@ export class IngestService {
     return { success: true, video };
   }
 
+  /**
+   * Standardized error handler for the ingestion pipeline.
+   * Logs contextual error messages, increments retry counts, and re-throws a rich error.
+   * @param videoId The UUID of the video that failed
+   * @param context A string describing which step of the pipeline failed
+   * @param error The original error or exception caught
+   */
   private async handleFailure(videoId: string, context: string, error: any) {
     const originalMessage =
       error instanceof Error ? error.message : JSON.stringify(error);

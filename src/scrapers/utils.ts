@@ -1,6 +1,15 @@
 /**
- * Generates a URL-friendly, unique slug for a video.
- * Example: "mi-house-agriculture-committee-2025-12-23"
+ * Generates a URL-friendly, unique slug for a video record.
+ * Normalizes the title by removing accents and special characters, and appends
+ * the state, source, and hearing date to ensure a collision-resistant identifier.
+ * @param state The geographic state abbreviation (e.g., 'MI')
+ * @param source The branch or committee source (e.g., 'house')
+ * @param title The descriptive title of the hearing or video
+ * @param date The hearing date used to timestamp the slug
+ * @returns A kebab-case string formatted as "state-source-title-date"
+ * * @example
+ * generateSlug('MI', 'House', 'Agriculture & Forestry!', new Date('2025-12-23'))
+ * // returns "mi-house-agriculture-forestry-2025-12-23"
  */
 export function generateSlug(
   state: string,

@@ -13,7 +13,11 @@ export interface TranscriptionResult {
 }
 
 /**
- * Transcribe a remote audio/video URL with Deepgram.
+ * Requests an automated transcription from Deepgram for a publicly accessible media URL.
+ * Uses the high-performance 'nova-3' model with smart formatting and punctuation enabled.
+ * @param url - The remote address of the media file (e.g., a presigned S3 URL)
+ * @returns A promise resolving to a structured result containing the transcript text, detected language, and full provider metadata
+ * @throws Error if the Deepgram API returns a failure or if the transcription cannot be completed
  */
 export async function transcribeFromUrl(
   url: string
@@ -45,6 +49,14 @@ export async function transcribeFromUrl(
   };
 }
 
+/**
+ * Transcribes a local media file by reading its contents into a buffer and sending it to Deepgram.
+ * Ideal for temporary local files or environments where media isn't yet staged in cloud storage.
+ * @param path - The local filesystem path to the media file
+ * @param mimetype - The standard MIME type of the file (e.g., 'audio/mp3', 'video/mp4')
+ * @returns A promise resolving to the structured transcription result and raw metadata
+ * @throws Error if the file cannot be read or if the Deepgram API encounters an error
+ */
 export async function transcribeFromFile(
   path: string,
   mimetype: string

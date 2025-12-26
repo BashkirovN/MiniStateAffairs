@@ -1,3 +1,4 @@
+import { JOB_LIMITS } from "../config/jobs";
 import { State } from "../db/types";
 import { query } from "./client";
 import { VideoRow, VideoSource, VideoStatus } from "./types";
@@ -14,6 +15,10 @@ export interface UpsertDiscoveredVideoInput {
 }
 
 export class VideoRepository {
+  /**
+   * Retrieves a single video record by its unique identifier.
+   * @param id The UUID of the video
+   */
   async findById(id: string): Promise<VideoRow | null> {
     const result = await query<VideoRow>("SELECT * FROM videos WHERE id = $1", [
       id
@@ -21,6 +26,12 @@ export class VideoRepository {
     return result.rows[0] || null;
   }
 
+  /**
+   * Performs an upsert operation for newly discovered videos.
+   * Updates the slug, title, and URLs if the video already exists based on the
+   * unique constraint of state, source, and external identifier.
+   * @param input The data object containing video metadata and source identifiers
+   */
   async upsertDiscoveredVideo(
     input: UpsertDiscoveredVideoInput
   ): Promise<void> {
@@ -70,6 +81,11 @@ export class VideoRepository {
     );
   }
 
+  /**
+   * Fetches a general list of videos ordered by their discovery date.
+   * Primarily used for administrative views or bulk data exports.
+   * @param limit The maximum number of records to return
+   */
   async getAllVideos(limit: number): Promise<VideoRow[]> {
     const result = await query<VideoRow>(
       `
@@ -84,23 +100,36 @@ export class VideoRepository {
     return result.rows;
   }
 
+  // TODO remove?
+  /**
+   * Retrieves videos that are currently eligible for processing.
+   * Filters for 'pending' or 'failed' statuses where the retry count is
+   * still within the acceptable threshold.
+   * @param limit The maximum number of videos to pick up for processing
+   */
   async findProcessable(limit: number): Promise<VideoRow[]> {
-    const result = await query<VideoRow>(
+    const { rows } = await query<VideoRow>(
       `
       SELECT *
       FROM videos
-      WHERE status IN ('pending', 'failed')
-        AND retry_count < 5
+      WHERE status IN ($1, $2)
+        AND retry_count < $3
       ORDER BY created_at ASC
-      LIMIT $1
+      LIMIT $4
       `,
-
-      [limit]
+      [VideoStatus.PENDING, VideoStatus.FAILED, JOB_LIMITS.MAX_RETRIES, limit]
     );
 
-    return result.rows;
+    return rows;
   }
 
+  /**
+   * Returns videos that are currently "in-flight" or queued, excluding
+   * final states like 'completed' or 'permanent_failure'.
+   * @param state The geographic state (e.g., 'MI')
+   * @param source The branch of government (e.g., 'house')
+   * @param limit The maximum number of records to return
+   */
   async findUnfinishedWorkByStateAndSource(
     state: State,
     source: VideoSource,
@@ -109,17 +138,32 @@ export class VideoRepository {
     const { rows } = await query<VideoRow>(
       `
     SELECT * FROM videos 
-    WHERE state = $1 AND source = $2
-    AND status != 'completed'
-    AND (retry_count < 5)
+    WHERE state = $1 
+      AND source = $2
+      AND status NOT IN ($3, $4)
+      AND retry_count < $5
     ORDER BY hearing_date ASC
-    LIMIT $3
+    LIMIT $6
     `,
-      [state, source, limit]
+      [
+        state,
+        source,
+        VideoStatus.COMPLETED,
+        VideoStatus.PERMANENT_FAILURE,
+        JOB_LIMITS.MAX_RETRIES,
+        limit
+      ]
     );
     return rows;
   }
 
+  /**
+   * Transitions a video to a new status and optionally logs errors or increments retries.
+   * This is the primary method for moving videos through the processing pipeline.
+   * @param id The UUID of the video
+   * @param status The new VideoStatus to apply
+   * @param options Metadata updates including S3 keys, error messages, and retry increments
+   */
   async updateStatus(
     id: string,
     status: VideoStatus,
@@ -147,7 +191,8 @@ export class VideoRepository {
   }
 
   /**
-   * Resets a video's retry count and status so it can be re-processed.
+   * Resets the retry counter for a specific video to zero.
+   * Typically used when manual intervention has fixed an underlying issue.
    * @param id The UUID of the video
    */
   async resetRetryCount(id: string): Promise<void> {
@@ -165,33 +210,116 @@ export class VideoRepository {
   }
 
   /**
-   * Finds videos stuck in 'downloading' or 'transcribing' for longer than the threshold
-   * and resets them to 'failed' so they can be picked up by the retry logic.
-   * * @param hoursThreshold Number of hours before a job is considered "stuck"
-   * @returns The number of videos reset
+   * Identifies and resets videos that have been stuck in a processing state
+   * (e.g., 'downloading') for longer than the allowed time window.
+   * @param state The geographic state (e.g., 'MI')
+   * @param source The branch of government (e.g., 'house')
+   * @param hoursThreshold Number of hours before a job is considered "stuck"
+   * @returns The number of videos moved back to the 'failed' state
    */
   async resetStuckVideos(
     state: State,
     source: VideoSource,
-    hoursThreshold: number
+    hoursThreshold: number = JOB_LIMITS.STUCK_THRESHOLD_HOURS
   ): Promise<number> {
-    const result = await query(
+    const { rows } = await query(
       `
-      UPDATE videos
-      SET
-        status = 'failed',
-        last_error = 'Auto-Reset: Job stuck in processing state for too long',
-        updated_at = NOW()
-      WHERE
-        state = $1
-        AND source = $2
-        AND status IN ('downloading', 'transcribing')
-        AND updated_at < NOW() - ($3 * INTERVAL '1 hour')
-      RETURNING id
-      `,
-      [state, source, hoursThreshold]
+    UPDATE videos
+    SET
+      status = $3,
+      last_error = 'Auto-Reset: Job stuck in processing state',
+      updated_at = NOW()
+    WHERE state = $1
+      AND source = $2
+      AND status IN ($4, $5)
+      AND updated_at < NOW() - ($6 * INTERVAL '1 hour')
+    RETURNING id
+    `,
+      [
+        state,
+        source,
+        VideoStatus.FAILED,
+        VideoStatus.DOWNLOADING,
+        VideoStatus.TRANSCRIBING,
+        hoursThreshold
+      ]
+    );
+    return rows.length;
+  }
+
+  /**
+   * Retrieves detailed records of videos that have reached the maximum retry limit.
+   * These videos remain in the 'failed' state but are excluded from active processing
+   * until manual intervention occurs.
+   * @param state The geographic state (e.g., 'MI')
+   * @param source The branch of government (e.g., 'house')
+   */
+  async getAbandonedVideos(
+    state: State,
+    source: VideoSource
+  ): Promise<VideoRow[]> {
+    const { rows } = await query<VideoRow>(
+      `
+    SELECT id, title, slug, retry_count, last_error, hearing_date
+    FROM videos
+    WHERE state = $1 
+      AND source = $2
+      AND status = $3
+      AND retry_count >= $4
+    ORDER BY hearing_date DESC
+    `,
+      [state, source, VideoStatus.FAILED, JOB_LIMITS.MAX_RETRIES]
+    );
+    return rows;
+  }
+
+  /**
+   * Formats and prints a scannable table of abandoned videos to the console.
+   * Used for manual oversight to identify specific videos failing consistently.
+   * @param state The geographic state (e.g., 'MI')
+   * @param source The branch of government (e.g., 'house')
+   */
+  async printAbandonedReport(state: State, source: VideoSource): Promise<void> {
+    const videos = await this.getAbandonedVideos(state, source);
+
+    if (videos.length === 0) {
+      return;
+    }
+
+    console.log(
+      `\n⚠️  ${"=".repeat(
+        15
+      )} ABANDONED VIDEOS (${state} ${source}) ${"=".repeat(15)}`
     );
 
-    return result.rows.length;
+    console.table(
+      videos.map((v) => ({
+        ID: v.id.slice(0, 8),
+        Date: v.hearing_date.split("T")[0],
+        Retries: v.retry_count,
+        Title: v.title.length > 50 ? v.title.substring(0, 47) + "..." : v.title,
+        Error: v.last_error?.split("\n")[0] // Only show the first line of the error
+      }))
+    );
+
+    console.log(`Total Abandoned: ${videos.length}\n`);
+  }
+
+  /**
+   * Terminates further processing for a video by marking it as a permanent failure.
+   * This removes the video from the retry queue and requires a manual reason.
+   * @param videoId The UUID of the video
+   * @param reason A descriptive reason for why the video cannot be processed
+   */
+  async markAsPermanentFailure(videoId: string, reason: string): Promise<void> {
+    await query(
+      `
+      UPDATE videos 
+      SET status = $2, 
+          last_error = $3 
+      WHERE id = $1
+      `,
+      [videoId, VideoStatus.PERMANENT_FAILURE, `Manual Review: ${reason}`]
+    );
   }
 }

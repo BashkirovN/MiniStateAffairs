@@ -6,6 +6,12 @@ import { generateSlug } from "../utils";
 
 const HOUSE_ARCHIVE_URL = "https://house.mi.gov/VideoArchive";
 
+/**
+ * Parses a natural language date string specifically formatted for the MI House archives.
+ * Extracts month names and numeric days/years using regex to handle variations in text.
+ * @param dateText - The raw string extracted from the archive link (e.g., "January 15, 2025")
+ * @returns A JavaScript Date object if the match is successful, otherwise null
+ */
 function parseHouseDate(dateText: string): Date | null {
   const match = dateText.match(
     /^(?:.*?\b)?(January|February|March|April|May|June|July|August|September|October|November|December)[a-z]*\s+(\d{1,2}),\s+(\d{4})/i
@@ -30,6 +36,14 @@ function parseHouseDate(dateText: string): Date | null {
   return new Date(parseInt(year), month, parseInt(day));
 }
 
+/**
+ * Scrapes the Michigan House video archive using DOM parsing.
+ * Loads the full archive HTML, extracts video identifiers from anchor tags,
+ * and maps them to a standardized DiscoveredVideo format.
+ * @param options - Configuration for the lookback window
+ * @param options.daysBack - Number of days in the past to search for videos (defaults to 30)
+ * @returns A promise resolving to an array of discovered videos from the House archive
+ */
 export async function fetchRecent(
   options: { daysBack?: number } = {}
 ): Promise<DiscoveredVideo[]> {

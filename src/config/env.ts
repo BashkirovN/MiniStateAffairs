@@ -7,6 +7,13 @@ export interface AppConfig {
   deepgramApiKey: string;
 }
 
+/**
+ * Validates and loads application environment variables into a structured config object.
+ * Performs a strict presence check for critical infrastructure keys including
+ * database credentials, AWS settings, and transcription API keys.
+ * @returns A validated AppConfig object containing all required service credentials
+ * @throws Error if any required environment variable is missing from process.env
+ */
 export function loadConfig(): AppConfig {
   const { DATABASE_URL, AWS_REGION, S3_BUCKET, DEEPGRAM_API_KEY } = process.env;
 

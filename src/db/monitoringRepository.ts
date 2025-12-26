@@ -1,8 +1,14 @@
+import { LogLevel } from "../services/jobReporter";
 import { query } from "./client";
 
 export class MonitoringRepository {
   /**
-   * Creates the initial record for a job run
+   * Initializes a new job execution record in the tracking table.
+   * Sets the initial status to 'running' and returns the generated UUID for subsequent logging.
+   * @param state The geographic state being processed (e.g., 'MI')
+   * @param source The specific branch or source (e.g., 'senate')
+   * @param executor The name or identifier of the service/worker running the job
+   * @returns The unique UUID of the newly created job run
    */
   async createJobRun(
     state: string,
@@ -18,11 +24,15 @@ export class MonitoringRepository {
   }
 
   /**
-   * Adds a log entry linked to a specific run
+   * Appends a granular log message to a specific job run.
+   * Used for auditing the step-by-step progress of a scraper or processor.
+   * @param runId The UUID of the associated job run
+   * @param level The severity level using the LogLevel enum (INFO, WARN, ERROR)
+   * @param message The descriptive log content
    */
-  async insertLog(
+  async insertJobLog(
     runId: string,
-    level: string,
+    level: LogLevel,
     message: string
   ): Promise<void> {
     await query(
@@ -32,9 +42,12 @@ export class MonitoringRepository {
   }
 
   /**
-   * Updates metrics in real-time
+   * Updates the progress counters for a job run in real-time.
+   * This allows for monitoring long-running jobs before they are finalized.
+   * @param runId The UUID of the job run to update
+   * @param counts An object containing discovered, processed, and failed tallies
    */
-  async updateMetrics(
+  async updateJobMetrics(
     runId: string,
     counts: { discovered: number; processed: number; failed: number }
   ): Promise<void> {
@@ -49,7 +62,10 @@ export class MonitoringRepository {
   }
 
   /**
-   * Finalizes the job run with status and optional error summary
+   * Marks a job run as complete and records final metrics and timestamps.
+   * Captures an optional error summary if the job terminated due to an exception.
+   * @param runId The UUID of the job run to close
+   * @param data The final status, counters, and any terminal error messages
    */
   async finalizeJobRun(
     runId: string,
@@ -80,10 +96,12 @@ export class MonitoringRepository {
   }
 
   /**
-   * Returns a summary of a specific job run
+   * Retrieves a high-level summary of a specific job run, including duration.
+   * Useful for API responses or detailed single-job CLI inspections.
+   * @param runId The UUID of the job run
    */
-  async getRunSummary(runId: string) {
-    const res = await query(
+  async getJobRunSummary(runId: string): Promise<any> {
+    const { rows } = await query(
       `SELECT 
         state, 
         source,
@@ -96,14 +114,16 @@ export class MonitoringRepository {
        FROM job_runs WHERE id = $1`,
       [runId]
     );
-    return res.rows[0];
+    return rows[0] || null;
   }
 
   /**
-   * Gets a summary of job runs for the last X days
+   * Aggregates job performance statistics over a rolling window of days.
+   * Groups results by state and source to calculate success rates and throughput.
+   * @param days The number of days to look back from the current time
    */
-  async getLastDaysSummary(days: number) {
-    const res = await query(
+  async getLastDaysJobSummary(days: number): Promise<any[]> {
+    const { rows } = await query(
       `
       SELECT 
         state,
@@ -121,15 +141,16 @@ export class MonitoringRepository {
       `,
       [days]
     );
-
-    return res.rows;
+    return rows;
   }
 
-  /*
-   * Prints a summary of job runs for the last X days
+  /**
+   * Generates and prints a visual health report of system jobs to the console.
+   * Includes color-coded status indicators (🟢/🟡/🔴) based on the success percentage.
+   * @param days The lookback period for the report in days
    */
-  async printLastDaysSummary(days: number) {
-    const rows = await this.getLastDaysSummary(days);
+  async printLastDaysJobSummary(days: number): Promise<void> {
+    const rows = await this.getLastDaysJobSummary(days);
 
     if (!rows || rows.length === 0) {
       console.log(`\n--- No job data found for the last ${days} days ---`);

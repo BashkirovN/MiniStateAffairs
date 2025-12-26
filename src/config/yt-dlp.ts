@@ -76,6 +76,14 @@ const SOURCE_MAP: Record<VideoSource, keyof typeof PLATFORM_CONFIGS> = {
   [VideoSource.HOUSE]: "MICHIGAN_HOUSE"
 };
 
+/**
+ * Constructs a specialized array of arguments for the yt-dlp downloader.
+ * Combines global defaults with platform-specific headers (Referer, Origin) to bypass
+ * common anti-bot and CORS restrictions on government media servers.
+ * @param source - The branch of government providing the video source
+ * @param url - The direct or page URL of the video to be downloaded
+ * @returns A flat array of strings suitable for spawning a child process
+ */
 export function getYtDlpArgs(source: VideoSource, url: string): string[] {
   const platformKey = SOURCE_MAP[source];
   const config = PLATFORM_CONFIGS[platformKey];
