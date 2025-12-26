@@ -81,7 +81,7 @@ export async function fetchRecent(
     if (!date || date < cutoff || isNaN(date.getTime())) return;
 
     const videoMatch = href.match(/video=([^&\s]+)/);
-    let rawVideoId = videoMatch ? videoMatch[1] : null;
+    const rawVideoId = videoMatch ? videoMatch[1] : null;
     if (!rawVideoId) return;
 
     const cleanVideoId = rawVideoId.replace(".mp4", "");

@@ -1,23 +1,36 @@
 {
   "name": "mini-state-affairs-app",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "build": "tsc",
-    "dev": "NODE_EXTRA_CA_CERTS=./certs/mi-house-ca.pem ts-node src/bin/ingest.ts",
-    "start": "NODE_EXTRA_CA_CERTS=./certs/mi-house-ca.pem node dist/bin/ingest.js"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "description": "High-reliability ingestion engine for state legislative media and transcriptions.",
   "type": "commonjs",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc",
+    "ingest:mi-senate": "npm run start -- --state=MI --source=senate",
+    "ingest:mi-house": "npm run start -- --state=MI --source=house",
+    "dev": "NODE_OPTIONS='--no-deprecation' NODE_EXTRA_CA_CERTS=./certs/mi-house-ca.pem ts-node src/bin/ingest.ts",
+    "start": "NODE_OPTIONS='--no-deprecation' NODE_EXTRA_CA_CERTS=./certs/mi-house-ca.pem node dist/bin/ingest.js",
+    "report": "ts-node src/jobs/summaryReport.ts",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\""
+  },
+  "author": "Nikolai Bashkirov",
+  "license": "ISC",
   "devDependencies": {
     "@types/cheerio": "^0.22.35",
     "@types/node": "^25.0.3",
     "@types/pg": "^8.16.0",
+    "@typescript-eslint/eslint-plugin": "^8.50.1",
+    "@typescript-eslint/parser": "^8.50.1",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.7.4",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.50.1"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.957.0",
@@ -28,5 +41,8 @@
     "cheerio": "^1.1.2",
     "dotenv": "^17.2.3",
     "pg": "^8.16.3"
-  }
+  },
+  "bin": {
+  "job-report": "./src/jobs/summaryReport.ts"
+}
 }

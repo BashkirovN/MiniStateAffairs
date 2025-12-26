@@ -1,5 +1,5 @@
 import * as fs from "node:fs";
-import { createClient } from "@deepgram/sdk";
+import { createClient, SyncPrerecordedResponse } from "@deepgram/sdk";
 import { loadConfig } from "../config/env";
 
 const config = loadConfig();
@@ -9,7 +9,7 @@ export const deepgramClient = createClient(config.deepgramApiKey);
 export interface TranscriptionResult {
   text: string;
   language: string;
-  raw: unknown;
+  raw: SyncPrerecordedResponse;
 }
 
 /**
@@ -28,7 +28,8 @@ export async function transcribeFromUrl(
       {
         model: "nova-3",
         smart_format: true,
-        punctuate: true
+        punctuate: true,
+        detect_language: true
       }
     );
 
@@ -40,12 +41,16 @@ export async function transcribeFromUrl(
   const alt = channel?.alternatives?.[0];
 
   const transcriptText = alt?.transcript ?? "";
-  const metadata = result?.metadata as any;
+
+  const detectedLang =
+    typeof channel?.detected_language === "string"
+      ? channel.detected_language
+      : "en";
 
   return {
     text: transcriptText,
-    language: metadata?.detected_language ?? "en",
-    raw: result
+    language: detectedLang,
+    raw: result as SyncPrerecordedResponse
   };
 }
 
@@ -77,11 +82,17 @@ export async function transcribeFromFile(
 
   const channel = result?.results?.channels?.[0];
   const alt = channel?.alternatives?.[0];
-  const metadata = result?.metadata as any;
+
+  const transcriptText = alt?.transcript ?? "";
+
+  const detectedLang =
+    typeof channel?.detected_language === "string"
+      ? channel.detected_language
+      : "en";
 
   return {
-    text: alt?.transcript ?? "",
-    language: metadata?.detected_language ?? "en",
-    raw: result
+    text: transcriptText,
+    language: detectedLang,
+    raw: result as SyncPrerecordedResponse
   };
 }

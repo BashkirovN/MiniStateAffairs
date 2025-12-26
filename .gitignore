@@ -1,2 +1,38 @@
-node_modules
+# --- Dependencies ---
+node_modules/
+.pnp
+.pnp.js
+
+# --- Environment Secrets (CRITICAL) ---
 .env
+.env.local
+.env.*.local
+
+# --- Build & Compiled Output ---
+dist/
+build/
+*.tsbuildinfo
+
+# --- Logs & Debugging ---
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.eslintcache
+
+# --- Database & Storage ---
+*.sql
+*.dump
+
+# --- OS & Editor Files ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# --- Testing ---
+coverage/
+.nyc_output

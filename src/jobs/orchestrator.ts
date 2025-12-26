@@ -4,6 +4,8 @@ import { VideoRepository } from "../db/videoRepository";
 import { TranscriptRepository } from "../db/transcriptRepository";
 import { TranscriptionService } from "../services/transcriptionService";
 import { State, VideoSource } from "../db/types";
+import { JOB_LIMITS } from "../config/jobs";
+import { runSentinelCheck } from "../utils/sentinel";
 
 /**
  * The primary orchestration entry point for a scheduled ingestion job.
@@ -21,13 +23,25 @@ import { State, VideoSource } from "../db/types";
 export async function runScheduledJob(
   state: State,
   source: VideoSource,
-  daysBack: number = 30
+  options: {
+    daysBack?: number;
+    stuckThresholdHours?: number;
+    maxRetries?: number;
+  } = {}
 ) {
+  const {
+    daysBack = 30,
+    stuckThresholdHours = JOB_LIMITS.STUCK_THRESHOLD_HOURS,
+    maxRetries = JOB_LIMITS.MAX_RETRIES
+  } = options;
+
+  await runSentinelCheck();
+
   const reporter = new JobReporter(state, source);
 
   // Dependency Injection
   const ingestService = new IngestService(
-    new VideoRepository(),
+    new VideoRepository(maxRetries, stuckThresholdHours),
     new TranscriptRepository(),
     new TranscriptionService()
   );
@@ -76,24 +90,34 @@ export async function runScheduledJob(
       try {
         await ingestService.processFullPipeline(video.id);
         await reporter.incrementProcessed();
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+
         await reporter.incrementFailed();
         await reporter.log(
           LogLevel.ERROR,
-          `--- Pipeline Failed ---:\n ${video.id}: ${err.message} `
+          `--- Pipeline Failed ---:\n ${video.id}: ${errorMessage} `
         );
         // We do NOT throw here; we want to continue processing other videos
       }
     }
 
     await reporter.finishRun();
-  } catch (criticalError: any) {
+  } catch (criticalError: unknown) {
+    const criticalMessage =
+      criticalError instanceof Error
+        ? criticalError.message
+        : String(criticalError);
     // This catches issues like DB connection loss or scraper code crashes
     await reporter.log(
       LogLevel.ERROR,
-      `CRITICAL JOB FAILURE: ${criticalError.message}`
+      `CRITICAL JOB FAILURE: ${criticalMessage}`
     );
-    await reporter.finishRun(criticalError);
+    await reporter.finishRun(
+      criticalError instanceof Error
+        ? criticalError
+        : new Error(criticalMessage)
+    );
     throw criticalError; // Re-throw so the system logs it as a process crash
   }
 }

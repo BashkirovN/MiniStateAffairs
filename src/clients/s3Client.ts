@@ -2,7 +2,8 @@ import {
   S3Client,
   PutObjectCommand,
   HeadObjectCommand,
-  DeleteObjectCommand
+  DeleteObjectCommand,
+  S3ServiceException
 } from "@aws-sdk/client-s3";
 import { loadConfig } from "../config/env";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
@@ -11,8 +12,10 @@ import { PassThrough } from "stream";
 import { State, VideoSource } from "../db/types";
 import { spawn } from "child_process";
 import { getYtDlpArgs } from "../config/yt-dlp";
+import { fetchWithRetry } from "../utils/http";
 
 const config = loadConfig();
+const MIN_VIDEO_SIZE = 5 * 1024 * 1024; // Assume no video can be smaller than 5MB
 
 export const s3Client = new S3Client({
   region: config.awsRegion,
@@ -26,7 +29,7 @@ export const s3Client = new S3Client({
 export interface UploadParams {
   bucket?: string;
   key: string;
-  body: Buffer | Uint8Array | Blob | string | ReadableStream<any>;
+  body: Buffer | Uint8Array | Blob | string | ReadableStream<Uint8Array>;
   contentType?: string;
 }
 
@@ -75,10 +78,13 @@ export async function objectExists(
     });
     await s3Client.send(cmd);
     return true;
-  } catch (err: any) {
-    if (err?.$metadata?.httpStatusCode === 404) {
-      return false;
+  } catch (err: unknown) {
+    if (err instanceof S3ServiceException) {
+      if (err.$metadata?.httpStatusCode === 404) {
+        return false;
+      }
     }
+
     throw err;
   }
 }
@@ -145,9 +151,25 @@ export async function uploadVideoFromUrl(input: {
   const key = buildVideoObjectKey(state, source, slug, hearingDate);
   const bucket = config.s3Bucket;
 
+  // Idempotency Check
   if (await objectExists(key, bucket)) {
     console.log(`[${slug}] Skip: Video already exists at ${key}`);
     return buildPublicS3Url(key, bucket, config.awsRegion);
+  }
+
+  // Pre-flight Check: Verify the URL is reachable
+  try {
+    const headRes = await fetchWithRetry(originalVideoUrl, { method: "HEAD" });
+    if (!headRes.ok) {
+      throw new Error(
+        `Pre-flight check failed: Source returned ${headRes.status}`
+      );
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `[${slug}] Pre-flight check failed. URL unreachable: ${message}`
+    );
   }
 
   console.log(`[${slug}] Starting yt-dlp stream to S3...`);
@@ -197,8 +219,7 @@ export async function uploadVideoFromUrl(input: {
   try {
     const processExitPromise = new Promise((resolve, reject) => {
       ytDlpProcess.on("close", (code) => {
-        const MIN_VIDEO_SIZE = 5 * 1024 * 1024; // 5MB threshold
-
+        // Post-download Validation
         if (code !== 0) {
           reject(new Error(`yt-dlp failed (code ${code}): ${stderrData}`));
         } else if (totalBytes < MIN_VIDEO_SIZE) {
@@ -216,7 +237,7 @@ export async function uploadVideoFromUrl(input: {
         }
       });
 
-      ytDlpProcess.on("error", (err) => {
+      ytDlpProcess.on("error", () => {
         reject(new Error(`Failed to start yt-dlp`));
       });
     });
@@ -229,7 +250,7 @@ export async function uploadVideoFromUrl(input: {
       )} MB`
     );
     return buildPublicS3Url(key, bucket, config.awsRegion);
-  } catch (err: any) {
+  } catch (err: unknown) {
     // Tell the S3 uploader to stop any pending part uploads immediately
     upload.abort();
     ytDlpProcess.kill("SIGKILL");
@@ -242,15 +263,17 @@ export async function uploadVideoFromUrl(input: {
         new DeleteObjectCommand({ Bucket: bucket, Key: key })
       );
       console.log(`[${slug}] Cleaned up failed S3 object.`);
-    } catch (s3Err) {
+    } catch {
       // Ignore if file doesn't exist
     }
 
     const errorMessage =
       err instanceof Error ? err.message : JSON.stringify(err);
-    const fullContext = `[Upload Failed] ${errorMessage}`;
-    const richError = new Error(fullContext);
-    (richError as any).originalError = err;
+
+    const richError = new Error(`[Upload Failed] ${errorMessage}`, {
+      cause: err
+    });
+
     throw richError;
   }
 }

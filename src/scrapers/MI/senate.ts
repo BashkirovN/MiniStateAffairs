@@ -106,9 +106,10 @@ export async function fetchRecent(
       }
       consecutiveFailures = 0;
       if (shouldStop) break;
-    } catch (error: any) {
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
       consecutiveFailures++;
-      console.log(`❌ Page ${page} failed: ${error.message}`);
+      console.log(`❌ Page ${page} failed: ${errorMessage}`);
     }
     page++;
   }

@@ -91,7 +91,7 @@ export class IngestService {
       }
 
       return count;
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (
         error instanceof TypeError &&
         error.message.includes("fetchRecent is not a function")
@@ -102,7 +102,7 @@ export class IngestService {
       }
       console.error(
         `[Discovery] Failed for ${state} ${source}:`,
-        error.message
+        error instanceof Error ? error.message : String(error)
       );
       throw error; // Re-throw so the worker reports the discovery failure
     }
@@ -138,7 +138,7 @@ export class IngestService {
     if (!result.success) {
       if (result.reason === ValidationReason.WRONG_STATUS) {
         // Check if it's already past this step
-        const v = (result as any).video;
+        const v = result.video;
         if (
           v &&
           (v.status === VideoStatus.DOWNLOADED ||
@@ -321,7 +321,11 @@ export class IngestService {
    * @param context A string describing which step of the pipeline failed
    * @param error The original error or exception caught
    */
-  private async handleFailure(videoId: string, context: string, error: any) {
+  private async handleFailure(
+    videoId: string,
+    context: string,
+    error: unknown
+  ) {
     const originalMessage =
       error instanceof Error ? error.message : JSON.stringify(error);
 
@@ -338,8 +342,9 @@ export class IngestService {
 
     // Re-throw with the context attached
     // This ensures that even without a log here, the caller knows EXACTLY what happened.
-    const richError = new Error(fullContext);
-    (richError as any).originalError = error;
+    const richError = new Error(fullContext, {
+      cause: error
+    });
     throw richError;
   }
 }

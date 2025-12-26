@@ -1,4 +1,3 @@
-import { JOB_LIMITS } from "../config/jobs";
 import { State } from "../db/types";
 import { query } from "./client";
 import { VideoRow, VideoSource, VideoStatus } from "./types";
@@ -15,6 +14,11 @@ export interface UpsertDiscoveredVideoInput {
 }
 
 export class VideoRepository {
+  constructor(
+    private maxRetries: number = 5,
+    private stuckThresholdHours: number = 10
+  ) {}
+
   /**
    * Retrieves a single video record by its unique identifier.
    * @param id The UUID of the video
@@ -100,41 +104,22 @@ export class VideoRepository {
     return result.rows;
   }
 
-  // TODO remove?
-  /**
-   * Retrieves videos that are currently eligible for processing.
-   * Filters for 'pending' or 'failed' statuses where the retry count is
-   * still within the acceptable threshold.
-   * @param limit The maximum number of videos to pick up for processing
-   */
-  async findProcessable(limit: number): Promise<VideoRow[]> {
-    const { rows } = await query<VideoRow>(
-      `
-      SELECT *
-      FROM videos
-      WHERE status IN ($1, $2)
-        AND retry_count < $3
-      ORDER BY created_at ASC
-      LIMIT $4
-      `,
-      [VideoStatus.PENDING, VideoStatus.FAILED, JOB_LIMITS.MAX_RETRIES, limit]
-    );
-
-    return rows;
-  }
-
   /**
    * Returns videos that are currently "in-flight" or queued, excluding
    * final states like 'completed' or 'permanent_failure'.
    * @param state The geographic state (e.g., 'MI')
    * @param source The branch of government (e.g., 'house')
-   * @param limit The maximum number of records to return
+   * @param [limit=1000] The maximum number of records to return (optional)
+   * @param [maximumRetries] The retry ceiling (optional)
+   * @returns An array of VideoRow objects
    */
   async findUnfinishedWorkByStateAndSource(
     state: State,
     source: VideoSource,
-    limit: number = 1000
+    limit: number = 1000,
+    maximumRetries?: number
   ): Promise<VideoRow[]> {
+    const maxRetries = maximumRetries ?? this.maxRetries;
     const { rows } = await query<VideoRow>(
       `
     SELECT * FROM videos 
@@ -150,7 +135,7 @@ export class VideoRepository {
         source,
         VideoStatus.COMPLETED,
         VideoStatus.PERMANENT_FAILURE,
-        JOB_LIMITS.MAX_RETRIES,
+        maxRetries,
         limit
       ]
     );
@@ -220,8 +205,9 @@ export class VideoRepository {
   async resetStuckVideos(
     state: State,
     source: VideoSource,
-    hoursThreshold: number = JOB_LIMITS.STUCK_THRESHOLD_HOURS
+    hoursThreshold?: number
   ): Promise<number> {
+    const threshold = hoursThreshold ?? this.stuckThresholdHours;
     const { rows } = await query(
       `
     UPDATE videos
@@ -241,7 +227,7 @@ export class VideoRepository {
         VideoStatus.FAILED,
         VideoStatus.DOWNLOADING,
         VideoStatus.TRANSCRIBING,
-        hoursThreshold
+        threshold
       ]
     );
     return rows.length;
@@ -253,11 +239,15 @@ export class VideoRepository {
    * until manual intervention occurs.
    * @param state The geographic state (e.g., 'MI')
    * @param source The branch of government (e.g., 'house')
+   * @param [maximumRetries] The retry ceiling (optional)
+   * @returns An array of VideoRow objects
    */
   async getAbandonedVideos(
     state: State,
-    source: VideoSource
+    source: VideoSource,
+    maximumRetries?: number
   ): Promise<VideoRow[]> {
+    const maxRetries = maximumRetries ?? this.maxRetries;
     const { rows } = await query<VideoRow>(
       `
     SELECT id, title, slug, retry_count, last_error, hearing_date
@@ -268,7 +258,7 @@ export class VideoRepository {
       AND retry_count >= $4
     ORDER BY hearing_date DESC
     `,
-      [state, source, VideoStatus.FAILED, JOB_LIMITS.MAX_RETRIES]
+      [state, source, VideoStatus.FAILED, maxRetries]
     );
     return rows;
   }

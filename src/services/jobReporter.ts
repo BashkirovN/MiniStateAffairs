@@ -8,12 +8,20 @@ export enum LogLevel {
   ERROR = "ERROR"
 }
 
+interface PostgresInterval {
+  minutes?: number;
+  seconds?: number;
+}
+
 export class JobReporter {
   private runId: string | null = null;
   private counts = { discovered: 0, processed: 0, failed: 0 };
   private repo = new MonitoringRepository();
 
-  constructor(private state: State, private source: VideoSource) {}
+  constructor(
+    private state: State,
+    private source: VideoSource
+  ) {}
 
   /**
    * Initializes a new job run record and establishes the tracking context.
@@ -127,6 +135,11 @@ export class JobReporter {
 
     const summary = await this.repo.getJobRunSummary(this.runId);
 
+    if (!summary) {
+      console.warn(`[Report] No summary found for run ID: ${this.runId}`);
+      return;
+    }
+
     console.log(`\n${"=".repeat(40)}`);
     console.log(`JOB FINISHED: ${this.state}-${this.source}`);
     console.log(`${"=".repeat(40)}`);
@@ -153,8 +166,13 @@ export class JobReporter {
    * Handles edge cases for short-running jobs that finish in seconds.
    * @param duration The interval object from the database query
    */
-  private formatPostgresInterval(duration: any): string {
+  private formatPostgresInterval(
+    duration: PostgresInterval | string | null | undefined
+  ): string {
     if (!duration) return "0s";
+
+    if (typeof duration === "string") return duration;
+
     const mins = duration.minutes || 0;
     const secs = duration.seconds || 0;
     return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;

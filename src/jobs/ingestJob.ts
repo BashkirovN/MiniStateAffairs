@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import { loadConfig } from "../config/env";
 import { VideoRepository } from "../db/videoRepository";
 import { shutdownPool } from "../db/client";
@@ -6,6 +7,7 @@ import { TranscriptRepository } from "../db/transcriptRepository";
 import { IngestService } from "../services/ingestService";
 import { MonitoringRepository } from "../db/monitoringRepository";
 
+//TODO: Remove
 export async function runIngestJob(): Promise<void> {
   const config = loadConfig();
 

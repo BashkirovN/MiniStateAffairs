@@ -24,7 +24,6 @@ export async function retryWithBackoff<T>(
   // small jitter to avoid thundering herd
   const jitter = () => Math.random() * 100;
 
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
       return await fn();

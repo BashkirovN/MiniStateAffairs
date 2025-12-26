@@ -48,9 +48,11 @@ export class TranscriptionService {
       });
 
       return result;
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errorMessage =
+        err instanceof Error ? err.message : JSON.stringify(err);
       await this.videoRepo.updateStatus(videoId, VideoStatus.FAILED, {
-        lastError: String(err?.message ?? err),
+        lastError: errorMessage,
         incrementRetry: true
       });
       throw err;

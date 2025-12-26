@@ -1,45 +1,75 @@
-# Design decisions and questions
+# State Affairs Video Ingestion Engine
 
-## Decisions
+A high-reliability automated pipeline for monitoring, scraping, and transcribing US State legislative videos.
 
-- **AWS S3** and **RDS** + plain **SQL** were picked to get a refresher on the stack used by StateAffairs.
-- **yt-dlp** was picked for its reliable streaming when dealing with brittle connections.
-- Some government websites have issues with certificates. Having a necessary certificate in `certs` solved the problem for Michigan House.
+## 🛠 Technical Stack
 
-## Questions
+| Component     | Technology                                      |
+| :------------ | :---------------------------------------------- |
+| **Runtime**   | Node.js + TypeScript                            |
+| **Database**  | AWS RDS PostgreSQL (Persistence & Job Tracking) |
+| **Cloud**     | AWS S3 (Media Storage)                          |
+| **AI/ML**     | Deepgram (Speech-to-Text)                       |
+| **CLI Tools** | `yt-dlp` (Stream Extraction)                    |
+| **Parser**    | Cheerio (HTML Scraping)                         |
 
-- If we only need transcripts, could we use Deepgram to transcribe videos by url instead of downloading them?
+## ⚙️ Core Workflow
 
-Example workflow (step‑by‑step)
-Cron triggers node ingest.js every 10 minutes.
+The engine follows a structured state machine to ensure data integrity:
 
-ingest.js:
+1. **Maintenance:** Clears stale job locks from previous interrupted runs.
+2. **Discovery:** Executes state/source-specific scrapers to identify new hearings.
+3. **Ingest:** Downloads media via yt-dlp and streams it directly to S3 (zero local disk storage).
+4. **Transcribe:** Sends S3 media to Deepgram; results are indexed in Postgres.
+5. **Monitor:** Provides real-time logging and health reporting with success-rate metrics.
 
-Fetch latest House/Senate listings, parse entries and derive IDs for the last 60 days.
+---
 
-Upsert each into videos with status='pending' when new.
+## 🚀 How to Use
 
-ingest.js selects up to N videos where status IN ('pending','failed') and retry_count < N_MAX.
+### Installation
 
-For each selected video:
+1. Install dependencies:
 
-Mark status='downloading', attempt download.
+   ```bash
+   npm install
+   ```
 
-On success, mark status='downloaded'; on failure, status='failed', increment retry_count.
+2. Ensure `yt-dlp` is installed and available in your system PATH.
 
-For status='downloaded' videos:
-
-Mark status='transcribing', call Whisper or a transcription API.
-
-On success, store transcript and mark status='completed'.
-
-On failure, mark status='failed', increment retry_count.
-
-Subsequent cron runs continue from DB state, picking up any missed or failed videos automatically.
-
-## Database Setup
+### Database Setup
 
 1. Connect to RDS:
-   `psql -h <host> -U <user> -d <database>`
+   ```bash
+   psql -h <host> -U <user> -d <database>
+   ```
 2. Initialize schema:
-   `\i db/schema.sql`
+   ```bash
+   \i db/schema.sql
+   ```
+
+### Execution
+
+The engine uses a "lane" architecture. Start a worker for a specific state and branch:
+
+```bash
+npm run build
+npm start -- --state=MI --source=senate --days=7
+```
+
+### Reporting
+
+To view the system health dashboard for the last 7 days:
+
+```typescript
+await repository.printLastDaysJobSummaryReport(7);
+```
+
+---
+
+## 📈 Monitoring & Reliability
+
+- **Error Handling:** Redundant logs are stripped; only unique, actionable errors are reported.
+- **Abandoned Jobs:** Videos exceeding the retry limit are flagged for manual review.
+- **Concurrency:** Supports simultaneous runs for House and Senate across all 50 states.
+- **External Orchestration via CLI flags:** Ensures process isolation, allows to scale horizontally, schedule jobs at different frequencies per state, and prevents a single scraper failure from impacting the entire pipeline's uptime. It also keeps memory overhead low and logs distinct.

@@ -1,6 +1,28 @@
 import { LogLevel } from "../services/jobReporter";
 import { query } from "./client";
 
+export interface JobRunSummary {
+  state: string;
+  source: string;
+  status: "pending" | "running" | "completed" | "failed";
+  found: number;
+  ok: number;
+  fail: number;
+  duration: string | { hours?: number; minutes?: number; seconds?: number };
+  error_summary: string | null;
+}
+
+export interface DailyStats {
+  state: string;
+  source: string;
+  run_date: Date;
+  runs_count: number;
+  total_found: number;
+  total_success: number;
+  total_failures: number;
+  success_rate_pct: number | null;
+}
+
 export class MonitoringRepository {
   /**
    * Initializes a new job execution record in the tracking table.
@@ -100,8 +122,8 @@ export class MonitoringRepository {
    * Useful for API responses or detailed single-job CLI inspections.
    * @param runId The UUID of the job run
    */
-  async getJobRunSummary(runId: string): Promise<any> {
-    const { rows } = await query(
+  async getJobRunSummary(runId: string): Promise<JobRunSummary | null> {
+    const { rows } = await query<JobRunSummary>(
       `SELECT 
         state, 
         source,
@@ -122,18 +144,19 @@ export class MonitoringRepository {
    * Groups results by state and source to calculate success rates and throughput.
    * @param days The number of days to look back from the current time
    */
-  async getLastDaysJobSummary(days: number): Promise<any[]> {
-    const { rows } = await query(
+  async getLastDaysJobSummary(days: number): Promise<DailyStats[]> {
+    // In PostgreSQL, COUNT and SUM returned as strings. Need to cast to int/float
+    const { rows } = await query<DailyStats>(
       `
       SELECT 
         state,
         source,
         DATE(start_time) as run_date,
-        COUNT(id) as runs_count,
-        SUM(items_discovered) as total_found,
-        SUM(items_processed) as total_success,
-        SUM(items_failed) as total_failures,
-        ROUND(SUM(items_processed)::numeric / NULLIF(SUM(items_processed + items_failed), 0) * 100, 1) as success_rate_pct
+        COUNT(id)::int as runs_count,     
+        SUM(items_discovered)::int as total_found,
+        SUM(items_processed)::int as total_success,
+        SUM(items_failed)::int as total_failures,
+        ROUND(SUM(items_processed)::numeric / NULLIF(SUM(items_processed + items_failed), 0) * 100, 1)::float as success_rate_pct
       FROM job_runs
       WHERE start_time > NOW() - ($1 * INTERVAL '1 day')
       GROUP BY state, source, run_date
@@ -157,8 +180,8 @@ export class MonitoringRepository {
       return;
     }
 
-    const reportData = rows.map((row: any) => {
-      const rate = parseFloat(row.success_rate_pct || 0);
+    const reportData = rows.map((row: DailyStats) => {
+      const rate = row.success_rate_pct || 0;
       let statusIcon = "🟢";
       if (rate < 95) statusIcon = "🟡";
       if (rate < 80) statusIcon = "🔴";
@@ -168,10 +191,10 @@ export class MonitoringRepository {
         State: row.state,
         Source: row.source || "N/A",
         Date: new Date(row.run_date).toISOString().split("T")[0],
-        Runs: parseInt(row.runs_count),
-        Found: parseInt(row.total_found),
-        OK: parseInt(row.total_success),
-        Fail: parseInt(row.total_failures),
+        Runs: row.runs_count,
+        Found: row.total_found,
+        OK: row.total_success,
+        Fail: row.total_failures,
         "Success %": `${rate}%`
       };
     });
