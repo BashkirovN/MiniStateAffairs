@@ -8,7 +8,6 @@ export enum VideoSource {
 }
 
 export enum VideoStatus {
-  QUEUED = "queued",
   PENDING = "pending", // Initial state, URL discovered but not downloaded
   DOWNLOADING = "downloading", // Currently being downloaded/uploaded to S3
   DOWNLOADED = "downloaded", // Video file is safe in S3
@@ -16,6 +15,12 @@ export enum VideoStatus {
   COMPLETED = "completed", // Video uploaded AND transcribed
   FAILED = "failed", // Failed and scheduled for a retry
   PERMANENT_FAILURE = "permanent_failure" // Won't be picked up again
+}
+
+export enum LogLevel {
+  INFO = "INFO",
+  WARN = "WARN",
+  ERROR = "ERROR"
 }
 
 export interface VideoRow {

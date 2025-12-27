@@ -40,7 +40,7 @@ export class TranscriptRepository {
    * This may be used to fetch text for search indexing.
    * @param videoId The UUID of the video
    */
-  async getByVideoId(videoId: string): Promise<TranscriptRow | null> {
+  async getTranscriptByVideoId(videoId: string): Promise<TranscriptRow | null> {
     const result = await query<TranscriptRow>(
       `SELECT * FROM transcripts WHERE video_id = $1`,
       [videoId]

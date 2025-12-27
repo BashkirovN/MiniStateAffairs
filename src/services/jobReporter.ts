@@ -1,12 +1,5 @@
 import { MonitoringRepository } from "../db/monitoringRepository";
-import { State, VideoSource } from "../db/types";
-
-// TODO: Move this to a shared library
-export enum LogLevel {
-  INFO = "INFO",
-  WARN = "WARN",
-  ERROR = "ERROR"
-}
+import { State, VideoSource, LogLevel } from "../db/types";
 
 interface PostgresInterval {
   minutes?: number;

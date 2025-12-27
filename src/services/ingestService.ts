@@ -3,6 +3,7 @@ import { TranscriptRepository } from "../db/transcriptRepository";
 import { State, VideoRow, VideoSource, VideoStatus } from "../db/types";
 import { TranscriptionService, TransProvider } from "./transcriptionService";
 import { uploadVideoFromUrl } from "../clients/s3Client";
+import { fetchWithRetry } from "../utils/http";
 
 export enum ValidationReason {
   NOT_FOUND = "not_found",
@@ -40,7 +41,7 @@ export class IngestService {
     const s3Url = await this.uploadStep(videoId);
 
     if (s3Url) {
-      await this.transcribeStep(videoId);
+      await this.transcribeStep(videoId, s3Url);
     }
     console.log(`--- Pipeline Finished: ${videoId} ---\n`);
   }
@@ -59,7 +60,7 @@ export class IngestService {
   async discoverNewVideos(
     state: State,
     source: VideoSource,
-    daysBack: number = 30
+    daysBack: number = 1
   ): Promise<number> {
     try {
       const module = await import(`../scrapers/${state}/${source}`);
@@ -113,6 +114,7 @@ export class IngestService {
    * Identifies videos that are either brand new or have previously failed and need retrying.
    * @param state The geographic state
    * @param source The branch of government
+   * @returns An array of VideoRow objects
    */
   async getQueue(state: State, source: VideoSource): Promise<VideoRow[]> {
     return await this.videoRepo.findUnfinishedWorkByStateAndSource(
@@ -130,53 +132,105 @@ export class IngestService {
    * @returns The S3 key/URL upon success, or null if skipped/failed
    */
   async uploadStep(videoId: string): Promise<string | null> {
-    const result = await this.validateStep(videoId, [
-      VideoStatus.PENDING,
-      VideoStatus.FAILED
-    ]);
-
-    if (!result.success) {
-      if (result.reason === ValidationReason.WRONG_STATUS) {
-        // Check if it's already past this step
-        const v = result.video;
-        if (
-          v &&
-          (v.status === VideoStatus.DOWNLOADED ||
-            v.status === VideoStatus.TRANSCRIBING ||
-            v.status === VideoStatus.COMPLETED)
-        ) {
-          console.log(`[${videoId}] Skip Upload: Video is already in S3.`);
-          return v.s3_key;
-        }
-      }
-      console.log(
-        `[${videoId}] Skipping Upload: ${result.message || result.reason}`
-      );
-      return null;
-    }
-
-    const { video } = result;
-
     try {
-      //  Lock status
-      await this.videoRepo.updateStatus(videoId, VideoStatus.DOWNLOADING);
+      //  ATOMIC CLAIM (The "Validation" and "Locking" happens here in one go)
+      const vidClaimedForDownloading = await this.videoRepo.updateStatus(
+        videoId,
+        VideoStatus.DOWNLOADING,
+        {
+          allowedStatuses: [VideoStatus.PENDING, VideoStatus.FAILED]
+        }
+      );
 
-      console.log(`Uploading to S3...`);
+      // ========== CHECKS BEGIN ==========
+      if (!vidClaimedForDownloading) {
+        const video = await this.videoRepo.findById(videoId);
+
+        if (!video) {
+          console.error(
+            `[${videoId}] DATA INTEGRITY ERROR: Video ID in queue but not in DB.`
+          );
+          return null;
+        }
+        if (
+          video.s3_key &&
+          [
+            VideoStatus.DOWNLOADED,
+            VideoStatus.TRANSCRIBING,
+            VideoStatus.COMPLETED
+          ].includes(video.status)
+        ) {
+          console.log(
+            `[${videoId}] Couldn't claim for DOWNLOADING - Video already exists in S3.`
+          );
+          return video.s3_key;
+        }
+
+        console.log(
+          `[${videoId}] Couldn't claim for DOWNLOADING - Already processing or max retries hit.`
+        );
+        return null;
+      }
+
+      const {
+        state,
+        source,
+        slug,
+        original_video_url,
+        video_page_url,
+        hearing_date
+      } = vidClaimedForDownloading;
+
+      // Pre-flight Check: Verify the URL is reachable
+      try {
+        const headRes = await fetchWithRetry(
+          original_video_url || video_page_url,
+          { method: "HEAD" }
+        );
+        if (!headRes.ok) {
+          throw new Error(
+            `Pre-flight check failed: Source returned ${headRes.status}`
+          );
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `[${slug}] Pre-flight check failed. URL unreachable: ${message}`
+        );
+      }
+      // ========== CHECKS END ==========
+
+      console.log(`[${videoId}] Uploading to S3...`);
+
       const s3Url = await uploadVideoFromUrl({
-        state: video.state as State,
-        source: video.source as VideoSource,
-        slug: video.slug,
-        originalVideoUrl: video.original_video_url || video.video_page_url, // Fallback if url is missing
-        hearingDate: new Date(video.hearing_date)
+        state: state as State,
+        source: source as VideoSource,
+        slug: slug,
+        originalVideoUrl: original_video_url || video_page_url, // Fallback if url is missing
+        hearingDate: new Date(hearing_date)
       });
 
-      await this.videoRepo.updateStatus(videoId, VideoStatus.DOWNLOADED, {
-        s3Key: s3Url
-      });
+      const vidClaimedToFinishDownloading = await this.videoRepo.updateStatus(
+        videoId,
+        VideoStatus.DOWNLOADED,
+        {
+          s3Key: s3Url,
+          allowedStatuses: [VideoStatus.DOWNLOADING]
+        }
+      );
+
+      if (!vidClaimedToFinishDownloading) {
+        console.log(
+          `[${videoId}] Could not transition to DOWNLOADED due to an unexpected status change.`
+        );
+        return null;
+      }
+
       console.log(`[${videoId}] Uploading to S3 completed`);
       return s3Url;
     } catch (error) {
       await this.handleFailure(videoId, "Upload failed", error);
+      // handleFailure will re-throw the error, the next line is unreachable
       return null;
     }
   }
@@ -186,53 +240,106 @@ export class IngestService {
    * Interfaces with external providers, saves transcript text to the database.
    * Transitions: DOWNLOADED -> TRANSCRIBING -> COMPLETED
    * @param videoId The UUID of the video to transcribe
+   * @param presignedS3Url The S3 key/URL of the video
    */
-  async transcribeStep(videoId: string): Promise<void> {
-    const result = await this.validateStep(videoId, [VideoStatus.DOWNLOADED]);
-
-    if (!result.success) {
-      console.log(
-        `[${videoId}] Skipping Transcribe: ${result.message || result.reason}`
-      );
-      return;
-    }
-
-    const { video } = result;
-
-    if (!video.s3_key) {
-      await this.handleFailure(
-        videoId,
-        "Pre-flight Check",
-        new Error("Status is DOWNLOADED but s3_key is missing.")
-      );
-      return;
-    }
-
+  async transcribeStep(videoId: string, presignedS3Url: string): Promise<void> {
     try {
-      //  Lock status
-      await this.videoRepo.updateStatus(videoId, VideoStatus.TRANSCRIBING);
+      //  Lock status. This atomic call handles the ID check, Status check, and Max Retries check.
+      const vidClaimedForTranscribing = await this.videoRepo.updateStatus(
+        videoId,
+        VideoStatus.TRANSCRIBING,
+        {
+          allowedStatuses: [VideoStatus.DOWNLOADED, VideoStatus.FAILED],
+          lastError: null
+        }
+      );
+
+      // ========== CHECKS BEGIN ==========
+      if (!presignedS3Url) {
+        await this.handleFailure(
+          videoId,
+          "Pre-flight Check",
+          new Error("Valid presigned S3 URL is required.")
+        );
+        return;
+      }
+
+      if (!vidClaimedForTranscribing) {
+        const currentVideo = await this.videoRepo.findById(videoId);
+
+        if (!currentVideo) {
+          console.error(`[${videoId}] ERROR: Video not found.`);
+          return;
+        }
+
+        if (currentVideo.status === VideoStatus.COMPLETED) {
+          console.log(`[${videoId}] Skip Transcribing: Already COMPLETED.`);
+          return;
+        }
+
+        console.log(
+          `[${videoId}] Could not transition to TRANSCRIBING due to an unexpected status change or max retries.`
+        );
+        return;
+      }
+
+      const existingTranscript =
+        await this.transcriptRepo.getTranscriptByVideoId(videoId);
+      const hasContent = (existingTranscript?.text?.trim().length ?? 0) > 0;
+      if (hasContent) {
+        console.log(
+          `[${videoId}] Skipping Transcribe: Transcript already exists.`
+        );
+        const vidClaimedToComplete = await this.videoRepo.updateStatus(
+          videoId,
+          VideoStatus.COMPLETED,
+          {
+            lastError: null
+          }
+        );
+
+        if (!vidClaimedToComplete) {
+          console.log(
+            `[${videoId}] Could not transition to COMPLETED due to an unexpected status change.`
+          );
+        }
+        return;
+      }
+      // ========== CHECKS END ==========
+
       console.log(`[${videoId}] Sending to Transcription Service...`);
 
       //  Transcribe
       const transcriptResult =
-        await this.transcriptionService.transcribeVideoFromUrl(
-          videoId,
-          video.s3_key
-        );
+        await this.transcriptionService.transcribeVideoFromUrl(presignedS3Url);
 
       //  Save Transcript
       await this.transcriptRepo.createTranscript({
         videoId,
         provider: TransProvider.DEEPGRAM,
-        language: "en",
+        language: transcriptResult.language,
         text: transcriptResult.text,
         rawJson: transcriptResult.raw
       });
 
       //  Complete
-      await this.videoRepo.updateStatus(videoId, VideoStatus.COMPLETED, {
-        lastError: null
-      });
+      const vidClaimedToFinishTranscribing = await this.videoRepo.updateStatus(
+        videoId,
+        VideoStatus.COMPLETED,
+        {
+          allowedStatuses: [VideoStatus.TRANSCRIBING],
+          lastError: null
+        }
+      );
+
+      if (!vidClaimedToFinishTranscribing) {
+        // This usually means the video was already COMPLETED by a duplicate run,
+        // or it was manually ABANDONED while the worker was busy.
+        console.warn(
+          `[${videoId}] Could not transition to COMPLETED due to an unexpected status change.`
+        );
+        return;
+      }
       console.log(`[${videoId}] Transcribed successfully.`);
     } catch (error) {
       await this.handleFailure(videoId, "Transcription Step", error);
@@ -262,59 +369,6 @@ export class IngestService {
   // --- HELPERS ---
 
   /**
-   * Internal helper to verify if a video is eligible for a specific processing step.
-   * Checks for existence, previous completion, max retry limits, and status alignment.
-   * @param videoId The UUID of the video
-   * @param allowedStatuses An array of statuses valid for the requested action
-   */
-  private async validateStep(
-    videoId: string,
-    allowedStatuses: VideoStatus[]
-  ): Promise<ValidationResult> {
-    const video = await this.videoRepo.findById(videoId);
-
-    if (!video) {
-      return {
-        success: false,
-        reason: ValidationReason.NOT_FOUND,
-        message: "Video ID not found in DB"
-      };
-    }
-
-    // If already done, we stop nicely
-    if (video.status === VideoStatus.COMPLETED) {
-      return {
-        success: false,
-        reason: ValidationReason.ALREADY_COMPLETED,
-        message: "Video already COMPLETED"
-      };
-    }
-
-    // Hard Stop on Retries
-    if (video.retry_count >= 5) {
-      return {
-        success: false,
-        reason: ValidationReason.MAX_RETRIES_EXCEEDED,
-        message: `Max retries (5) hit. Last error: ${video.last_error}`
-      };
-    }
-
-    // Status Check
-    if (!allowedStatuses.includes(video.status as VideoStatus)) {
-      return {
-        success: false,
-        reason: ValidationReason.WRONG_STATUS,
-        message: `Current status '${
-          video.status
-        }' is not in allowed list [${allowedStatuses.join(",")}]`,
-        video // Return video so caller can check if it's "ahead" of the step
-      };
-    }
-
-    return { success: true, video };
-  }
-
-  /**
    * Standardized error handler for the ingestion pipeline.
    * Logs contextual error messages, increments retry counts, and re-throws a rich error.
    * @param videoId The UUID of the video that failed
@@ -337,7 +391,14 @@ export class IngestService {
     // For now, we assume all errors are worth a retry up to the limit.
     await this.videoRepo.updateStatus(videoId, VideoStatus.FAILED, {
       lastError: fullContext,
-      incrementRetry: true
+      incrementRetry: true,
+      // Allow failing from anywhere EXCEPT when it's already done
+      allowedStatuses: [
+        VideoStatus.PENDING,
+        VideoStatus.DOWNLOADING,
+        VideoStatus.DOWNLOADED,
+        VideoStatus.TRANSCRIBING
+      ]
     });
 
     // Re-throw with the context attached

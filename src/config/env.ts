@@ -1,5 +1,7 @@
 import "dotenv/config";
 
+export const DEEPGRAM_MODEL = "nova-3";
+
 export interface AppConfig {
   databaseUrl: string;
   awsRegion: string;

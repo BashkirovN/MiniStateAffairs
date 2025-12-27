@@ -1,7 +1,11 @@
 BEGIN;
 
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
 DROP TABLE IF EXISTS transcripts;
 DROP TABLE IF EXISTS videos;
+DROP TABLE IF EXISTS job_runs;
+DROP TABLE IF EXISTS job_logs;
 
 CREATE TABLE videos (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -31,7 +35,7 @@ CREATE TABLE videos (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 
     CONSTRAINT valid_video_status CHECK (status IN (
-            'queued', 'pending', 'downloading', 'downloaded', 
+            'pending', 'downloading', 'downloaded', 
             'transcribing', 'completed', 'failed', 'permanent_failure'
           )),
     CONSTRAINT unique_video_source UNIQUE (state, source, external_id),
@@ -48,7 +52,7 @@ CREATE TABLE transcripts (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 
     
-    CONSTRAINT transcripts_video_id_unique UNIQUE (video_id);
+    CONSTRAINT transcripts_video_id_unique UNIQUE (video_id)
 );
 
 CREATE TYPE job_status AS ENUM ('running', 'completed', 'failed', 'completed_with_errors');
@@ -56,7 +60,7 @@ CREATE TYPE job_status AS ENUM ('running', 'completed', 'failed', 'completed_wit
 CREATE TABLE job_runs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   state VARCHAR(15) NOT NULL,            -- e.g., 'MI'
-  source VARCHAR(15) NOT NULL;                    -- e.g., 'house'
+  source VARCHAR(15) NOT NULL,                    -- e.g., 'house'
   executor VARCHAR(100) NOT NULL,        -- e.g., 'cron-worker-1'
   start_time TIMESTAMP NOT NULL DEFAULT NOW(),
   end_time TIMESTAMP,

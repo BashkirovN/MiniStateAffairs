@@ -29,13 +29,13 @@ const MI_SENATE_API_URL =
  * Iterates through paginated results from the Castus Cloud API, normalizing metadata
  * and constructing CDN URLs for HLS streams until the specified date cutoff is reached.
  * @param options - Configuration for the lookback window
- * @param options.daysBack - Number of days in the past to search for videos (defaults to 30)
+ * @param options.daysBack - Number of days in the past to search for videos (defaults to 1)
  * @returns A promise resolving to an array of discovered video objects ready for ingestion
  */
 export async function fetchRecent(
   options: { daysBack?: number } = {}
 ): Promise<DiscoveredVideo[]> {
-  const { daysBack = 30 } = options;
+  const { daysBack = 1 } = options;
   const cutoff = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
 
   const results: DiscoveredVideo[] = [];
@@ -108,6 +108,7 @@ export async function fetchRecent(
       if (shouldStop) break;
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : String(err);
+
       consecutiveFailures++;
       console.log(`❌ Page ${page} failed: ${errorMessage}`);
     }

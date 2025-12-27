@@ -13,6 +13,13 @@ export const COMMON_CONFIG = [
   // Tells yt-dlp NOT to use .part files (writes directly)
   "--no-part",
 
+  // Prevents yt-dlp from attempting to fix up broken streams
+  "--fixup",
+  "never",
+
+  // Prevents yt-dlp from downloading thumbnails
+  "--no-cache-dir",
+
   // Identifies the request as coming from a standard web browser.
   // Many gov servers block the default "yt-dlp" user-agent to prevent scraping.
   "--user-agent",
@@ -48,6 +55,7 @@ export const COMMON_CONFIG = [
   // Uses yt-dlp's internal HLS downloader rather than calling an external
   // tool like ffmpeg for the download phase. Often more stable for streams.
   "--hls-prefer-native",
+  //"--hls-use-mpegts", // Can be useful for some live streams (replaces "--hls-prefer-native")
 
   // Allows connection to older government servers that use outdated
   // SSL/TLS versions or configurations.
@@ -102,5 +110,5 @@ export function getYtDlpArgs(source: VideoSource, url: string): string[] {
     ...(config.extraArgs || [])
   ];
 
-  return [...COMMON_CONFIG, ...platformArgs, url + "DEBUG"];
+  return [...COMMON_CONFIG, ...platformArgs, url];
 }

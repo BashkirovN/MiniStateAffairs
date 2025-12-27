@@ -57,13 +57,25 @@ npm run build
 npm start -- --state=MI --source=senate --days=7
 ```
 
+![Run Log](./assets/run.png)
+
 ### Reporting
 
-To view the system health dashboard for the last 7 days:
+To view the system health dashboard for the last 30 days:
 
-```typescript
-await repository.printLastDaysJobSummaryReport(7);
+```bash
+npm run report -- 30
 ```
+
+---
+
+Identify videos that have exceeded the retry limit and require manual intervention.
+
+```bash
+npm run report abandoned MI senate
+```
+
+![System Summary Report](./assets/abandoned.png)
 
 ---
 

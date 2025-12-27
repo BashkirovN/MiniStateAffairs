@@ -1,4 +1,4 @@
-import { LogLevel } from "../services/jobReporter";
+import { LogLevel } from "./types";
 import { query } from "./client";
 
 export interface JobRunSummary {
@@ -173,34 +173,41 @@ export class MonitoringRepository {
    * @param days The lookback period for the report in days
    */
   async printLastDaysJobSummary(days: number): Promise<void> {
-    const rows = await this.getLastDaysJobSummary(days);
+    const stats = await this.getLastDaysJobSummary(days);
 
-    if (!rows || rows.length === 0) {
+    if (!stats || stats.length === 0) {
       console.log(`\n--- No job data found for the last ${days} days ---`);
       return;
     }
 
-    const reportData = rows.map((row: DailyStats) => {
-      const rate = row.success_rate_pct || 0;
-      let statusIcon = "🟢";
-      if (rate < 95) statusIcon = "🟡";
-      if (rate < 80) statusIcon = "🔴";
+    console.log(`\n=== SYSTEM MONITORING SUMMARY (Last ${days} Days) ===`);
+
+    const formattedStats = stats.map((s) => {
+      const needWork = s.total_success + s.total_failures;
+
+      // If no work was needed, it's a success (100%)
+      const successVal =
+        needWork === 0 ? 100 : (s.total_success / needWork) * 100;
+
+      let icon = "🔴";
+      if (successVal == 100) icon = "🟢";
+      else if (successVal >= 80) icon = "🟡";
 
       return {
-        Stat: statusIcon,
-        State: row.state,
-        Source: row.source || "N/A",
-        Date: new Date(row.run_date).toISOString().split("T")[0],
-        Runs: row.runs_count,
-        Found: row.total_found,
-        OK: row.total_success,
-        Fail: row.total_failures,
-        "Success %": `${rate}%`
+        " ": icon,
+        State: s.state,
+        Source: s.source,
+        Date: s.run_date.toISOString().split("T")[0],
+        Runs: s.runs_count,
+        Found: s.total_found,
+        "To Do": needWork,
+        Done: s.total_success,
+        Fail: s.total_failures,
+        "Success %": `${successVal.toFixed(1)}%`
       };
     });
 
-    console.log(`\n=== SYSTEM MONITORING SUMMARY (Last ${days} Days) ===`);
-    console.table(reportData);
-    console.log(`Legend: 🟢 >95% | 🟡 >80% | 🔴 <80% \n`);
+    console.table(formattedStats);
+    console.log(`Legend: 🟢 100% | 🟡 >=80% | 🔴 <80% \n`);
   }
 }

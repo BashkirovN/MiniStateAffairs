@@ -1,10 +1,11 @@
 import {
   S3Client,
-  PutObjectCommand,
   HeadObjectCommand,
+  GetObjectCommand,
   DeleteObjectCommand,
   S3ServiceException
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { loadConfig } from "../config/env";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { Upload } from "@aws-sdk/lib-storage";
@@ -12,17 +13,16 @@ import { PassThrough } from "stream";
 import { State, VideoSource } from "../db/types";
 import { spawn } from "child_process";
 import { getYtDlpArgs } from "../config/yt-dlp";
-import { fetchWithRetry } from "../utils/http";
 
 const config = loadConfig();
 const MIN_VIDEO_SIZE = 5 * 1024 * 1024; // Assume no video can be smaller than 5MB
 
 export const s3Client = new S3Client({
   region: config.awsRegion,
-  maxAttempts: 30, // Increase retries for transient network errors
+  maxAttempts: 10, // Increase retries for transient network errors
   requestHandler: new NodeHttpHandler({
-    connectionTimeout: 30000, // 30 seconds to establish connection
-    socketTimeout: 600000 // 10 minutes of inactivity allowed before timing out
+    connectionTimeout: 5_000, // 5 seconds to establish connection
+    socketTimeout: 300_000 // 5 minutes of inactivity allowed before timing out
   })
 });
 
@@ -31,32 +31,6 @@ export interface UploadParams {
   key: string;
   body: Buffer | Uint8Array | Blob | string | ReadableStream<Uint8Array>;
   contentType?: string;
-}
-
-/**
- * Uploads an arbitrary data object to an S3 bucket.
- * This operation is idempotent; providing an existing key will overwrite the current content.
- * @param params - The payload and destination metadata
- * @param params.bucket - Optional override for the target S3 bucket
- * @param params.key - The unique path identifier within the bucket
- * @param params.body - The data to store (Buffer, Stream, or String)
- * @param params.contentType - The MIME type of the file (e.g., 'application/pdf')
- * @returns A promise that resolves when the upload is successfully acknowledged
- */
-export async function uploadObject({
-  bucket,
-  key,
-  body,
-  contentType
-}: UploadParams): Promise<void> {
-  const command = new PutObjectCommand({
-    Bucket: bucket ?? config.s3Bucket,
-    Key: key,
-    Body: body,
-    ContentType: contentType
-  });
-
-  await s3Client.send(command);
 }
 
 /**
@@ -90,24 +64,6 @@ export async function objectExists(
 }
 
 /**
- * Generates a publicly accessible HTTPS URL for an S3 object.
- * Note: This assumes the bucket/object permissions are set to public-read.
- * @param key - The S3 object key
- * @param bucket - The name of the S3 bucket
- * @param region - The AWS region where the bucket resides
- * @returns A formatted string URL for direct media access
- */
-export function buildPublicS3Url(
-  key: string,
-  bucket: string,
-  region: string
-): string {
-  return `https://${bucket}.s3.${region}.amazonaws.com/${encodeURIComponent(
-    key
-  )}`;
-}
-
-/**
  * Builds a structured, hierarchical S3 key for organized video storage.
  * Paths are grouped by state, source, and hearing date to allow for easier
  * lifecycle management and manual browsing.
@@ -133,11 +89,31 @@ export function buildVideoObjectKey(
 }
 
 /**
+ * Generates a pre-signed URL for a S3 object.
+ * @param key - The S3 object key
+ * @param expiresInSeconds - The number of seconds the URL should remain valid
+ * @returns A promise resolving to the signed URL
+ */
+export async function getPresignedUrl(
+  key: string,
+  expiresInSeconds?: number
+): Promise<string> {
+  // Valid for 1 hour by default, plenty of time for a transcriber to process it
+  const expiresIn = expiresInSeconds ?? 3600;
+  const command = new GetObjectCommand({
+    Bucket: config.s3Bucket,
+    Key: key
+  });
+
+  return getSignedUrl(s3Client, command, { expiresIn });
+}
+
+/**
  * Pipes a live video stream from an external URL directly into an S3 object.
  * Uses a PassThrough stream to bridge a yt-dlp child process with the S3 multipart
  * uploader, ensuring the system can handle large files without high memory overhead.
  * @param input - The video source metadata and destination identifiers
- * @returns A promise resolving to the public URL of the finalized S3 object
+ * @returns A promise resolving to a presigned URL of the finalized S3 object
  * @throws Error if the download process fails or if the resulting file size is below the 5MB safety threshold
  */
 export async function uploadVideoFromUrl(input: {
@@ -154,22 +130,7 @@ export async function uploadVideoFromUrl(input: {
   // Idempotency Check
   if (await objectExists(key, bucket)) {
     console.log(`[${slug}] Skip: Video already exists at ${key}`);
-    return buildPublicS3Url(key, bucket, config.awsRegion);
-  }
-
-  // Pre-flight Check: Verify the URL is reachable
-  try {
-    const headRes = await fetchWithRetry(originalVideoUrl, { method: "HEAD" });
-    if (!headRes.ok) {
-      throw new Error(
-        `Pre-flight check failed: Source returned ${headRes.status}`
-      );
-    }
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `[${slug}] Pre-flight check failed. URL unreachable: ${message}`
-    );
+    return await getPresignedUrl(key);
   }
 
   console.log(`[${slug}] Starting yt-dlp stream to S3...`);
@@ -177,23 +138,83 @@ export async function uploadVideoFromUrl(input: {
   // Bridge between yt-dlp process and S3 Upload
   const passthrough = new PassThrough({ highWaterMark: 1024 * 1024 * 5 });
 
-  // Track actual bytes received to prevent saving empty/error files
-  let totalBytes = 0;
-  passthrough.on("data", (chunk) => {
-    totalBytes += chunk.length;
-  });
-
-  // yt-dlp arguments
+  // Spawn yt-dlp process with arguments
   const args = getYtDlpArgs(source, originalVideoUrl);
-
   const ytDlpProcess = spawn("yt-dlp", args);
-  let stderrData = "";
 
+  // Log yt-dlp stderr
+  let stderrData = "";
   ytDlpProcess.stderr.on("data", (data) => {
     stderrData += data.toString();
   });
 
+  // ---------------------------------------------------------
+  // 🔴 SAFETY NET: Kill yt-dlp if the main Node process dies
+  // ---------------------------------------------------------
+  const cleanupListener = () => {
+    if (ytDlpProcess && !ytDlpProcess.killed) {
+      console.warn(
+        `[${slug}] 🧹 Killing orphaned yt-dlp process (PID: ${ytDlpProcess.pid})...`
+      );
+      ytDlpProcess.kill("SIGKILL");
+    }
+  };
+
+  // Attach signal listeners
+  process.on("SIGTERM", cleanupListener);
+  process.on("SIGINT", cleanupListener);
+  process.on("exit", cleanupListener);
+  // ---------------------------------------------------------
+
+  // Start piping data
   ytDlpProcess.stdout.pipe(passthrough);
+
+  // To avoid 0-byte files in s3 saved from broken links,
+  // wait for the first chunk to arrive safely in the buffer
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const onReadable = () => {
+        cleanup();
+        resolve();
+      };
+      const onError = (err: Error) => {
+        cleanup();
+        reject(err);
+      };
+      const onClose = (code: number) => {
+        cleanup();
+        if (code !== 0)
+          reject(new Error(`Process exited early (code ${code})`));
+        else reject(new Error("Process exited without sending data"));
+      };
+
+      // Helper to remove listeners so we don't leak memory
+      const cleanup = () => {
+        passthrough.off("readable", onReadable);
+        ytDlpProcess.off("error", onError);
+        ytDlpProcess.off("close", onClose);
+      };
+
+      // LISTENERS
+      // 'readable' means "I have data waiting for you".
+      // It does NOT drain the data like 'data' does.
+      passthrough.once("readable", onReadable);
+      ytDlpProcess.once("error", onError);
+      ytDlpProcess.once("close", onClose);
+
+      // Timeout safety
+      setTimeout(() => {
+        cleanup();
+        reject(new Error("Stream timeout"));
+      }, 30_000);
+    });
+  } catch (err) {
+    // If startup failed, clean global listeners
+    process.off("SIGTERM", cleanupListener);
+    process.off("SIGINT", cleanupListener);
+    process.off("exit", cleanupListener);
+    throw err;
+  }
 
   // Setup S3 Upload
   const upload = new Upload({
@@ -201,8 +222,8 @@ export async function uploadVideoFromUrl(input: {
     params: {
       Bucket: bucket,
       Key: key,
-      Body: passthrough,
-      ContentType: "video/mp4"
+      Body: passthrough, // The passthrough has been buffering the first chunk
+      ContentType: "video/mp4" // Can also experiment with video/mpeg
     },
     partSize: 1024 * 1024 * 5,
     queueSize: 1, // Can't multi-stream, the connection is too brittle
@@ -210,8 +231,11 @@ export async function uploadVideoFromUrl(input: {
   });
 
   // Track progress
+  let totalBytes = 0;
   upload.on("httpUploadProgress", (p) => {
-    const mb = (p.loaded! / 1024 / 1024).toFixed(2);
+    totalBytes = p.loaded || 0;
+
+    const mb = (totalBytes / 1024 / 1024).toFixed(2);
     if (Number(mb) > 0 && Math.floor(Number(mb)) % 50 === 0)
       console.log(`[${slug}] S3 Uploaded: ${mb} MB`);
   });
@@ -219,6 +243,11 @@ export async function uploadVideoFromUrl(input: {
   try {
     const processExitPromise = new Promise((resolve, reject) => {
       ytDlpProcess.on("close", (code) => {
+        // CLEANUP: Remove listeners so we don't leak memory or kill future processes
+        process.off("SIGTERM", cleanupListener);
+        process.off("SIGINT", cleanupListener);
+        process.off("exit", cleanupListener);
+
         // Post-download Validation
         if (code !== 0) {
           reject(new Error(`yt-dlp failed (code ${code}): ${stderrData}`));
@@ -249,15 +278,21 @@ export async function uploadVideoFromUrl(input: {
         2
       )} MB`
     );
-    return buildPublicS3Url(key, bucket, config.awsRegion);
+    return await getPresignedUrl(key);
   } catch (err: unknown) {
     // Tell the S3 uploader to stop any pending part uploads immediately
-    upload.abort();
     ytDlpProcess.kill("SIGKILL");
+
+    try {
+      await upload.abort();
+    } catch {
+      // Ignore if file doesn't exist
+    }
 
     console.error(`[${slug}] Uploading to S3 Failed`);
 
     // Clean up the S3 object if it was a partial/corrupt upload
+    // A small delay or ensure it runs after the abort
     try {
       await s3Client.send(
         new DeleteObjectCommand({ Bucket: bucket, Key: key })
@@ -273,6 +308,11 @@ export async function uploadVideoFromUrl(input: {
     const richError = new Error(`[Upload Failed] ${errorMessage}`, {
       cause: err
     });
+
+    // CLEANUP: Remove listeners so we don't leak memory or kill future processes
+    process.off("SIGTERM", cleanupListener);
+    process.off("SIGINT", cleanupListener);
+    process.off("exit", cleanupListener);
 
     throw richError;
   }

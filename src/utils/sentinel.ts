@@ -17,12 +17,20 @@ export async function runSentinelCheck(): Promise<void> {
   try {
     await query("SELECT 1");
     console.log(`    ✅ Database: Reachable`);
-  } catch (err: unknown) {
-    const errorMessage =
-      err instanceof Error ? err.message : JSON.stringify(err);
+  } catch {
+    throw new Error(`CRITICAL: Database unreachable. Stopping job.`);
+  }
 
+  // --- CRITICAL: Database Schema Integrity ---
+  try {
+    await query("SELECT 1 FROM videos LIMIT 1");
+    await query("SELECT 1 FROM transcripts LIMIT 1");
+    await query("SELECT 1 FROM job_runs LIMIT 1");
+    await query("SELECT 1 FROM job_logs LIMIT 1");
+    console.log(`    ✅ Database: Schema OK (Tables exist)`);
+  } catch {
     throw new Error(
-      `CRITICAL: Database unreachable. Stopping job. (${errorMessage})`
+      `CRITICAL: Database connected, but schema is missing. Did you run 'schema.sql'?`
     );
   }
 
@@ -30,13 +38,8 @@ export async function runSentinelCheck(): Promise<void> {
   try {
     await s3Client.send(new ListBucketsCommand({}));
     console.log(`    ✅ AWS S3: Reachable`);
-  } catch (err: unknown) {
-    const errorMessage =
-      err instanceof Error ? err.message : JSON.stringify(err);
-
-    throw new Error(
-      `CRITICAL: AWS S3 unreachable. Stopping job. (${errorMessage})`
-    );
+  } catch {
+    throw new Error(`CRITICAL: AWS S3 unreachable. Stopping job.`);
   }
 
   // --- NON-CRITICAL: Deepgram ---

@@ -86,25 +86,6 @@ export class VideoRepository {
   }
 
   /**
-   * Fetches a general list of videos ordered by their discovery date.
-   * Primarily used for administrative views or bulk data exports.
-   * @param limit The maximum number of records to return
-   */
-  async getAllVideos(limit: number): Promise<VideoRow[]> {
-    const result = await query<VideoRow>(
-      `
-      SELECT *
-      FROM videos
-      ORDER BY created_at ASC
-      LIMIT $1
-      `,
-      [limit]
-    );
-
-    return result.rows;
-  }
-
-  /**
    * Returns videos that are currently "in-flight" or queued, excluding
    * final states like 'completed' or 'permanent_failure'.
    * @param state The geographic state (e.g., 'MI')
@@ -143,11 +124,14 @@ export class VideoRepository {
   }
 
   /**
-   * Transitions a video to a new status and optionally logs errors or increments retries.
+   * Transitions a video to a new status ONLY if it's currently in one of the allowed statuses
+   * Optionally logs errors or increments retries.
+   * Automatically resets errors for successful transitions.
    * This is the primary method for moving videos through the processing pipeline.
    * @param id The UUID of the video
    * @param status The new VideoStatus to apply
    * @param options Metadata updates including S3 keys, error messages, and retry increments
+   * @returns VideoRow ONLY if the transition was successful (atomic claim), otherwise null.
    */
   async updateStatus(
     id: string,
@@ -156,11 +140,21 @@ export class VideoRepository {
       s3Key?: string | null;
       lastError?: string | null;
       incrementRetry?: boolean;
+      allowedStatuses?: VideoStatus[];
+      maxRetries?: number;
     }
-  ): Promise<void> {
-    const { s3Key, lastError, incrementRetry } = options ?? {};
+  ): Promise<VideoRow | null> {
+    const { s3Key, lastError, incrementRetry, allowedStatuses, maxRetries } =
+      options ?? {};
+    const maxRetriesToSet = maxRetries ?? this.maxRetries;
 
-    await query(
+    // LOGIC: If we aren't explicitly passing an error, and we aren't moving TO a failed state,
+    // we should assume the current transition is a "success" and wipe the old error.
+    const shouldClearError =
+      lastError === undefined && status !== VideoStatus.FAILED;
+    const errorToSet = shouldClearError ? null : (lastError ?? null);
+
+    const result = await query<VideoRow>(
       `
       UPDATE videos
       SET
@@ -170,9 +164,25 @@ export class VideoRepository {
         retry_count = retry_count + $5,
         updated_at = now()
       WHERE id = $1
-      `,
-      [id, status, s3Key ?? null, lastError ?? null, incrementRetry ? 1 : 0]
+        -- 1. Status Lock: Only move if in allowed source states
+        AND ($6::text[] IS NULL OR status = ANY($6))
+        -- 2. Retry Lock: Only allow work if we haven't exceeded the max retries
+        -- (Unless we are explicitly moving to a FAILED status to record a final error)
+        AND (retry_count < $7 OR $2 = 'FAILED')
+        RETURNING *; -- Returns the full updated row`,
+      [
+        id,
+        status,
+        s3Key ?? null,
+        errorToSet,
+        incrementRetry ? 1 : 0,
+        allowedStatuses ?? null,
+        maxRetriesToSet
+      ]
     );
+
+    // Returns true if a row was actually updated
+    return result.rows[0] ?? null;
   }
 
   /**
@@ -271,6 +281,7 @@ export class VideoRepository {
    */
   async printAbandonedReport(state: State, source: VideoSource): Promise<void> {
     const videos = await this.getAbandonedVideos(state, source);
+    const MAX_ERROR_LEN = 40;
 
     if (videos.length === 0) {
       return;
@@ -283,13 +294,24 @@ export class VideoRepository {
     );
 
     console.table(
-      videos.map((v) => ({
-        ID: v.id.slice(0, 8),
-        Date: v.hearing_date.split("T")[0],
-        Retries: v.retry_count,
-        Title: v.title.length > 50 ? v.title.substring(0, 47) + "..." : v.title,
-        Error: v.last_error?.split("\n")[0] // Only show the first line of the error
-      }))
+      videos.map((v) => {
+        const cleanError = (v.last_error ?? "No error logged")
+          .replace(/[\r\n]+/g, " ")
+          .trim();
+
+        const shortError =
+          cleanError.length > MAX_ERROR_LEN
+            ? cleanError.substring(0, MAX_ERROR_LEN - 3) + "..."
+            : cleanError;
+        return {
+          ID: v.id.slice(0, 8),
+          Date: String(v.hearing_date).split("T")[0],
+          Retries: v.retry_count,
+          Title:
+            v.title.length > 50 ? v.title.substring(0, 47) + "..." : v.title,
+          Error: shortError
+        };
+      })
     );
 
     console.log(`Total Abandoned: ${videos.length}\n`);

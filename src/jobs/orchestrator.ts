@@ -1,9 +1,9 @@
 import { IngestService } from "../services/ingestService";
-import { JobReporter, LogLevel } from "../services/jobReporter";
+import { JobReporter } from "../services/jobReporter";
 import { VideoRepository } from "../db/videoRepository";
 import { TranscriptRepository } from "../db/transcriptRepository";
 import { TranscriptionService } from "../services/transcriptionService";
-import { State, VideoSource } from "../db/types";
+import { State, VideoSource, LogLevel } from "../db/types";
 import { JOB_LIMITS } from "../config/jobs";
 import { runSentinelCheck } from "../utils/sentinel";
 
@@ -17,7 +17,7 @@ import { runSentinelCheck } from "../utils/sentinel";
  * 5. Finalizes the run with success/failure metrics.
  * * @param state - The geographic state to process (e.g., 'MI')
  * @param source - The branch or legislative source (e.g., 'senate')
- * @param daysBack - The lookback window for the discovery phase (defaults to 30)
+ * @param daysBack - The lookback window for the discovery phase (defaults to 1)
  * @throws A critical error if the infrastructure (DB, Scraper loading) fails
  */
 export async function runScheduledJob(
@@ -30,7 +30,7 @@ export async function runScheduledJob(
   } = {}
 ) {
   const {
-    daysBack = 30,
+    daysBack = 1,
     stuckThresholdHours = JOB_LIMITS.STUCK_THRESHOLD_HOURS,
     maxRetries = JOB_LIMITS.MAX_RETRIES
   } = options;
