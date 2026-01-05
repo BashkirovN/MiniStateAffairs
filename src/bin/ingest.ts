@@ -31,7 +31,7 @@ async function main() {
     .find((a) => a.startsWith("--source="))
     ?.split("=")[1] as VideoSource;
   const daysArg = parseInt(
-    args.find((a) => a.startsWith("--days="))?.split("=")[1] || "7"
+    args.find((a) => a.startsWith("--days="))?.split("=")[1] || "1"
   );
 
   if (!stateArg || !sourceArg) {
@@ -44,7 +44,7 @@ async function main() {
   // Clean up any stray temp files from previous failed yt-dlp runs
   try {
     const cleanupCwd = resolve(__dirname, "..", "..");
-    console.log("rm will run in:", cleanupCwd);
+    console.log("Cleaning up temp directory:", cleanupCwd);
     execSync("rm -f -- *--Frag* *.part *.ytdl", { cwd: cleanupCwd });
   } catch {
     // Ignore errors if no files found

@@ -1,3 +1,4 @@
+import { execSync } from "child_process";
 import { deepgramClient } from "../clients/deepgramClient";
 import { s3Client } from "../clients/s3Client";
 import { query } from "../db/client";
@@ -16,7 +17,7 @@ export async function runSentinelCheck(): Promise<void> {
   // --- CRITICAL: Database ---
   try {
     await query("SELECT 1");
-    console.log(`    ✅ Database: Reachable`);
+    console.log(`    ✅ Database: OK`);
   } catch {
     throw new Error(`CRITICAL: Database unreachable. Stopping job.`);
   }
@@ -27,7 +28,7 @@ export async function runSentinelCheck(): Promise<void> {
     await query("SELECT 1 FROM transcripts LIMIT 1");
     await query("SELECT 1 FROM job_runs LIMIT 1");
     await query("SELECT 1 FROM job_logs LIMIT 1");
-    console.log(`    ✅ Database: Schema OK (Tables exist)`);
+    console.log(`    ✅ Database Schema: OK`);
   } catch {
     throw new Error(
       `CRITICAL: Database connected, but schema is missing. Did you run 'schema.sql'?`
@@ -37,9 +38,19 @@ export async function runSentinelCheck(): Promise<void> {
   // --- CRITICAL: AWS S3 ---
   try {
     await s3Client.send(new ListBucketsCommand({}));
-    console.log(`    ✅ AWS S3: Reachable`);
+    console.log(`    ✅ AWS S3: OK`);
   } catch {
     throw new Error(`CRITICAL: AWS S3 unreachable. Stopping job.`);
+  }
+
+  try {
+    // --- CRITICAL: yt-dlp ---
+    execSync("yt-dlp --version", { stdio: "ignore" });
+    console.log(`    ✅ yt-dlp: OK`);
+  } catch {
+    throw new Error(
+      `CRITICAL: yt-dlp unreachable. Please install it (brew install yt-dlp or pip install yt-dlp) Stopping job.`
+    );
   }
 
   // --- NON-CRITICAL: Deepgram ---
@@ -48,7 +59,7 @@ export async function runSentinelCheck(): Promise<void> {
     const { error } = await deepgramClient.manage.getProjects();
     if (error) throw error;
 
-    console.log(`    ✅ Deepgram: Reachable`);
+    console.log(`    ✅ Deepgram: OK`);
   } catch (err: unknown) {
     const errorMessage =
       err instanceof Error ? err.message : JSON.stringify(err);

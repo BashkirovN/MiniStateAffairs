@@ -3,7 +3,7 @@ import { TranscriptRepository } from "../db/transcriptRepository";
 import { State, VideoRow, VideoSource, VideoStatus } from "../db/types";
 import { TranscriptionService, TransProvider } from "./transcriptionService";
 import { uploadVideoFromUrl } from "../clients/s3Client";
-import { fetchWithRetry } from "../utils/http";
+import { fetchWithRetry, isRetryable } from "../utils/http";
 
 export enum ValidationReason {
   NOT_FOUND = "not_found",
@@ -387,11 +387,16 @@ export class IngestService {
       ? originalMessage
       : `[${context}] ${originalMessage}`;
 
-    // If it's a "Fatal" error (like 404), maybe we don't want to increment retry?
-    // For now, we assume all errors are worth a retry up to the limit.
-    await this.videoRepo.updateStatus(videoId, VideoStatus.FAILED, {
+    const shouldRetry = isRetryable(error);
+    const newStatus = shouldRetry
+      ? VideoStatus.FAILED
+      : VideoStatus.PERMANENT_FAILURE;
+
+    // Fatal errors will get status PERMANENT_FAILURE and retried anymore. All others will get FAILED.
+    console.error(`[${videoId}] ${fullContext}`);
+    await this.videoRepo.updateStatus(videoId, newStatus, {
       lastError: fullContext,
-      incrementRetry: true,
+      incrementRetry: shouldRetry,
       // Allow failing from anywhere EXCEPT when it's already done
       allowedStatuses: [
         VideoStatus.PENDING,

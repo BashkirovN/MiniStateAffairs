@@ -1,6 +1,15 @@
+# ⚠️⚠️⚠️ KEYS ⚠️⚠️⚠️
+
+<span style="color: red;">Secrets in .env are set to expire soon</span>
+
 # State Affairs Video Ingestion Engine
 
 A high-reliability automated pipeline for monitoring, scraping, and transcribing US State legislative videos.
+
+Currently supports:
+
+- [Michigan House](https://house.mi.gov/VideoArchive)
+- [Michigan Senate](https://cloud.castus.tv/vod/misenate)
 
 ## 🛠 Technical Stack
 
@@ -9,9 +18,9 @@ A high-reliability automated pipeline for monitoring, scraping, and transcribing
 | **Runtime**   | Node.js + TypeScript                            |
 | **Database**  | AWS RDS PostgreSQL (Persistence & Job Tracking) |
 | **Cloud**     | AWS S3 (Media Storage)                          |
-| **AI/ML**     | Deepgram (Speech-to-Text)                       |
-| **CLI Tools** | `yt-dlp` (Stream Extraction)                    |
 | **Parser**    | Cheerio (HTML Scraping)                         |
+| **CLI Tools** | `yt-dlp` (Stream Extraction)                    |
+| **AI/ML**     | Deepgram (Speech-to-Text)                       |
 
 ## ⚙️ Core Workflow
 

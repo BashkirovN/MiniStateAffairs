@@ -98,8 +98,8 @@ export async function getPresignedUrl(
   key: string,
   expiresInSeconds?: number
 ): Promise<string> {
-  // Valid for 1 hour by default, plenty of time for a transcriber to process it
-  const expiresIn = expiresInSeconds ?? 3600;
+  // Valid for 3 hours by default, plenty of time for a transcriber to process it
+  const expiresIn = expiresInSeconds ?? 10_800;
   const command = new GetObjectCommand({
     Bucket: config.s3Bucket,
     Key: key
