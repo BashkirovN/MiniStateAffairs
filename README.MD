@@ -1,7 +1,3 @@
-# ⚠️⚠️⚠️ KEYS ⚠️⚠️⚠️
-
-<span style="color: red;">Secrets in .env are set to expire soon</span>
-
 # State Affairs Video Ingestion Engine
 
 A high-reliability automated pipeline for monitoring, scraping, and transcribing US State legislative videos.
