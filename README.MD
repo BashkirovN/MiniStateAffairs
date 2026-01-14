@@ -1,4 +1,4 @@
-# State Affairs Video Ingestion Engine
+# StatePipe Video Ingestion Engine
 
 A high-reliability automated pipeline for monitoring, scraping, and transcribing US State legislative videos.
 
